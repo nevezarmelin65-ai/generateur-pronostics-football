@@ -95,7 +95,17 @@ def team_label(item):
     return f'{team.get("name", "Équipe inconnue")} — ID {team.get("id")}' + (f" ({country})" if country else "")
 
 def get_team_matches(team_id: int, key: str):
-    return api_get_with_key("fixtures", {"team": team_id, "last": 10}, key)
+    today = date.today()
+    start = date.fromordinal(today.toordinal() - 180)
+    return api_get_with_key(
+        "fixtures",
+        {
+            "team": team_id,
+            "from": start.isoformat(),
+            "to": today.isoformat()
+        },
+        key
+    )
 
 def normalize_matches(fixtures: list[dict[str, Any]], team_id: int):
     rows = []
