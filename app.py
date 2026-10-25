@@ -101,6 +101,7 @@ def get_team_matches(team_id: int, key: str):
         "fixtures",
         {
             "team": team_id,
+            "season": today.year,
             "from": start.isoformat(),
             "to": today.isoformat()
         },
