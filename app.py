@@ -110,4 +110,3 @@ if go:
     st.warning("Une variation de cote ou un signal statistique ne prouve pas qu'un match est truqué. Les scores restent des estimations, pas des garanties.")
 with st.expander("Sources et limites"):
     st.write("Aucune clé API n'est nécessaire. FotMob peut modifier ou limiter ses interfaces publiques. Les compositions, absences et cotes ne sont pas garanties.")
-    
