@@ -11,10 +11,20 @@ ESPN="https://site.api.espn.com/apis/site/v2/sports/soccer"
 # ESPN public endpoints, no API key. Availability and coverage vary by competition.
 LEAGUES={"Ligue 1 (France)":"fra.1","Premier League (Angleterre)":"eng.1","Liga (Espagne)":"esp.1","Serie A (Italie)":"ita.1","Bundesliga (Allemagne)":"ger.1","Ligue des champions":"uefa.champions","Ligue Europa":"uefa.europa","MLS (États-Unis)":"usa.1","Saudi Pro League":"ksa.1","World Cup":"fifa.world"}
 
+ALIASES = {
+    "psg": "paris saint germain",
+    "paris saint germain": "paris saint germain",
+    "parissaintgermain": "paris saint germain",
+    "ol": "lyon",
+    "olympiquelyonnais": "lyon",
+    "lyon": "lyon",
+}
+
 def norm(s):
     s=str(s or "").lower().replace("saint-germain","saint germain")
     s=re.sub(r"\b(fc|cf|sc|afc|club|olympique)\b", " ", s)
-    return re.sub(r"[^a-z0-9]", "", s)
+    cleaned=re.sub(r"[^a-z0-9]", "", s)
+    return ALIASES.get(cleaned, cleaned)
 
 def get_json(url):
     try:
@@ -25,21 +35,20 @@ def get_json(url):
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def league_teams(slug):
-    d=get_json(f"{ESPN}/{slug}/teams") or {}
-    teams=d.get("sports",[])
-    out=[]
-    # ESPN response usually nests teams under sports[].leagues[].teams[].team
-    for sport in teams:
-        for league in sport.get("leagues",[]):
-            for item in league.get("teams",[]):
-                t=item.get("team",item)
-                if t.get("id") and t.get("displayName"):
-                    out.append({"id":str(t["id"]),"name":t["displayName"],"slug":slug})
-    # Some endpoint variants return a direct teams list
-    for item in d.get("teams",[]):
-        t=item.get("team",item)
-        if t.get("id") and t.get("displayName"):
-            out.append({"id":str(t["id"]),"name":t["displayName"],"slug":slug})
+    d=get_json(f"{ESPN}/{slug}/teams?limit=1000") or {}
+    out=[]; seen=set()
+    def walk(obj):
+        if isinstance(obj, dict):
+            # Team objects can be nested at several levels in ESPN responses.
+            if obj.get("id") and (obj.get("displayName") or obj.get("name")):
+                name=obj.get("displayName") or obj.get("name")
+                key=(str(obj["id"]), name)
+                if key not in seen:
+                    seen.add(key); out.append({"id":str(obj["id"]),"name":name,"slug":slug})
+            for value in obj.values(): walk(value)
+        elif isinstance(obj, list):
+            for value in obj: walk(value)
+    walk(d)
     return out
 
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -88,8 +97,16 @@ def parse_schedule(data, team_name):
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def team_recent(team_id, slug, team_name):
-    d=get_json(f"{ESPN}/{slug}/teams/{quote(str(team_id))}/schedule")
-    return parse_schedule(d,team_name)
+    urls = [
+        f"{ESPN}/{slug}/teams/{quote(str(team_id))}/schedule",
+        f"{ESPN}/{slug}/teams/{quote(str(team_id))}/schedule?season={date.today().year}",
+    ]
+    for url in urls:
+        d=get_json(url)
+        rows=parse_schedule(d,team_name)
+        if rows:
+            return rows
+    return []
 
 def stats(rows):
     if not rows:return None
