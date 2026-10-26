@@ -1,179 +1,193 @@
-import streamlit as st
-import requests, pandas as pd, math, re
+import math
 from datetime import date, time
-from urllib.parse import quote
+from io import StringIO
 
-st.set_page_config(page_title="Générateur de pronostics football", page_icon="⚽", layout="wide")
-st.title("⚽ Générateur de pronostics football")
-st.write("Analyse les derniers résultats disponibles. Aucune statistique ni aucun score ne sont inventés.")
-HEADERS={"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36","Accept-Language":"fr-FR,fr;q=0.9,en;q=0.8"}
-ESPN="https://site.api.espn.com/apis/site/v2/sports/soccer"
-# ESPN public endpoints, no API key. Availability and coverage vary by competition.
-LEAGUES={"Ligue 1 (France)":"fra.1","Premier League (Angleterre)":"eng.1","Liga (Espagne)":"esp.1","Serie A (Italie)":"ita.1","Bundesliga (Allemagne)":"ger.1","Ligue des champions":"uefa.champions","Ligue Europa":"uefa.europa","MLS (États-Unis)":"usa.1","Saudi Pro League":"ksa.1","World Cup":"fifa.world"}
+import pandas as pd
+import requests
+import streamlit as st
 
-ALIASES = {
-    "psg": "parissaintgermain",
-    "parissaintgermain": "parissaintgermain",
-    "parissaintgermainfc": "parissaintgermain",
-    "parissaintgermainfootballclub": "parissaintgermain",
-    "ol": "lyon",
-    "olympiquelyonnais": "lyon",
-    "lyonnais": "lyon",
-    "lyon": "lyon",
+BASE = "https://raw.githubusercontent.com/oladeeayo/open-matchday/master/data"
+LEAGUES = {
+    "Angleterre — Premier League": "ENG_1_premier-league",
+    "Angleterre — Championship": "ENG_2_championship",
+    "Espagne — La Liga": "ESP_1_la-liga",
+    "Allemagne — Bundesliga": "GER_1_bundesliga",
+    "Italie — Serie A": "ITA_1_serie-a",
+    "France — Ligue 1": "FRA_1_ligue-1",
+    "France — Ligue 2": "FRA_2_ligue-2",
+    "Pays-Bas — Eredivisie": "NED_1_eredivisie",
+    "Portugal — Primeira Liga": "POR_1_primeira-liga",
+    "Belgique — Pro League": "BEL_1_pro-league",
+    "Turquie — Süper Lig": "TUR_1_super-lig",
+    "Grèce — Super League": "GRE_1_super-league",
+    "États-Unis — MLS": "USA_1_mls",
+    "Brésil — Serie A": "BRA_1_serie-a",
+    "UEFA — Ligue des champions": "UEFA_1_champions-league",
+    "UEFA — Ligue Europa": "UEFA_2_europa-league",
+    "UEFA — Ligue Conférence": "UEFA_3_conference-league",
 }
+st.set_page_config(page_title="Pronostics football", page_icon="⚽", layout="wide")
+st.title("⚽ Générateur de pronostics football — version améliorée")
+st.info("Résultats actualisés quotidiennement, pas en direct. Les alertes de risque ne prouvent jamais qu'un match est truqué.")
 
-def norm(s):
-    s=str(s or "").lower().replace("saint-germain", "saint germain")
-    cleaned=re.sub(r"[^a-z0-9]", "", s)
-    # Apply aliases before stripping generic words so club names remain matchable.
-    if cleaned in ALIASES:
-        return ALIASES[cleaned]
-    cleaned=re.sub(r"(footballclub|fc|cf|sc|afc|club|olympique)$", "", cleaned)
-    return ALIASES.get(cleaned, cleaned)
+@st.cache_data(ttl=3600, show_spinner=False)
+def csv(url):
+    r = requests.get(url, timeout=25)
+    r.raise_for_status()
+    return pd.read_csv(StringIO(r.text))
 
-def get_json(url):
-    try:
-        r=requests.get(url,headers=HEADERS,timeout=12); r.raise_for_status()
-        d=r.json(); return d if isinstance(d,dict) else None
-    except Exception:
-        return None
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_league(slug):
+    frames = []
+    for season in ("2627", "2526"):
+        try:
+            d = csv(f"{BASE}/{slug}/results_{season}.csv")
+            req = {"date", "home", "away", "ft_home", "ft_away"}
+            if d.empty or not req.issubset(d.columns):
+                continue
+            d["date"] = pd.to_datetime(d["date"], errors="coerce")
+            d["ft_home"] = pd.to_numeric(d["ft_home"], errors="coerce")
+            d["ft_away"] = pd.to_numeric(d["ft_away"], errors="coerce")
+            d = d.dropna(subset=["date", "home", "away", "ft_home", "ft_away"])
+            frames.append(d)
+        except Exception:
+            pass
+    if not frames:
+        raise RuntimeError("Pas de données disponibles pour ce championnat. Essaie-en un autre.")
+    d = pd.concat(frames, ignore_index=True).drop_duplicates(["date", "home", "away"])
+    return d.sort_values("date", ascending=False)
 
-@st.cache_data(ttl=1800, show_spinner=False)
-def league_teams(slug):
-    d=get_json(f"{ESPN}/{slug}/teams?limit=1000") or {}
-    out=[]; seen=set()
-    def walk(obj):
-        if isinstance(obj, dict):
-            # Team objects can be nested at several levels in ESPN responses.
-            if obj.get("id") and (obj.get("displayName") or obj.get("name")):
-                name=obj.get("displayName") or obj.get("shortDisplayName") or obj.get("name")
-                abbreviation=obj.get("abbreviation") or ""
-                key=(str(obj["id"]), name)
-                if name and key not in seen:
-                    seen.add(key); out.append({"id":str(obj["id"]),"name":name,"abbreviation":abbreviation,"slug":slug})
-            for value in obj.values(): walk(value)
-        elif isinstance(obj, list):
-            for value in obj: walk(value)
-    walk(d)
+def matches(df, team):
+    g = df[(df.home == team) | (df.away == team)].sort_values("date", ascending=False).head(10)
+    out = []
+    for _, m in g.iterrows():
+        home = m.home == team
+        gf, ga = (int(m.ft_home), int(m.ft_away)) if home else (int(m.ft_away), int(m.ft_home))
+        out.append({"Date": m.date.strftime("%Y-%m-%d"), "Adversaire": m.away if home else m.home,
+                    "Terrain": "Domicile" if home else "Extérieur", "Score": f"{int(m.ft_home)}-{int(m.ft_away)}",
+                    "BP": gf, "BC": ga, "Résultat": "V" if gf > ga else ("N" if gf == ga else "D")})
     return out
 
-@st.cache_data(ttl=1800, show_spinner=False)
-def find_team(name):
-    wanted=norm(name); candidates=[]
-    for league_name,slug in LEAGUES.items():
-        for t in league_teams(slug):
-            n=norm(t["name"])
-            ab=norm(t.get("abbreviation", ""))
-            if n==wanted or ab==wanted or (wanted and (wanted in n or n in wanted)):
-                candidates.append({**t,"league":league_name,"match": 4 if ab==wanted else 3 if n==wanted else 1})
-    if not candidates: return None
-    candidates.sort(key=lambda x:x["match"],reverse=True)
-    return candidates[0]
+def pois(lam, n=8):
+    return [math.exp(-lam) * lam**k / math.factorial(k) for k in range(n+1)]
 
-def parse_schedule(data, team_name):
-    rows=[]
-    if not isinstance(data,dict): return rows
-    events=data.get("events",[])
-    # Some ESPN schedule responses wrap events under a different key.
-    if not events and isinstance(data.get("schedule"),list): events=data["schedule"]
-    for event in events:
-        comps=event.get("competitions",[])
-        if not comps: continue
-        competitors=comps[0].get("competitors",[])
-        if len(competitors)<2: continue
-        h=next((c for c in competitors if c.get("homeAway")=="home"),None)
-        a=next((c for c in competitors if c.get("homeAway")=="away"),None)
-        if not h or not a: h,a=competitors[0],competitors[1]
-        ht=(h.get("team") or {}).get("displayName",""); at=(a.get("team") or {}).get("displayName","")
-        def sc(c):
-            try:return int(float(c.get("score")))
-            except (TypeError,ValueError):return None
-        hs,aws=sc(h),sc(a)
-        if hs is None or aws is None: continue
-        target=norm(team_name)
-        is_home=norm(ht)==target or target in norm(ht) or norm(ht) in target
-        is_away=norm(at)==target or target in norm(at) or norm(at) in target
-        if not is_home and not is_away: continue
-        opponent=at if is_home else ht; gf,ga=(hs,aws) if is_home else (aws,hs)
-        raw=event.get("date") or event.get("dateUTC")
-        dt=pd.to_datetime(raw,utc=True,errors="coerce") if raw else pd.NaT
-        if pd.notna(dt) and dt>pd.Timestamp.now(tz="UTC"): continue
-        rows.append({"Date UTC":dt,"Adversaire":opponent,"Lieu":"Domicile" if is_home else "Extérieur","Buts marqués":gf,"Buts encaissés":ga,"Résultat":"V" if gf>ga else "N" if gf==ga else "D"})
-    rows.sort(key=lambda x:x["Date UTC"] if pd.notna(x["Date UTC"]) else pd.Timestamp("1900-01-01",tz="UTC"),reverse=True)
-    return rows[:10]
+def predict(hr, ar):
+    if not hr or not ar:
+        raise ValueError("Pas assez de matchs récents pour cette équipe.")
+    hh = [r for r in hr if r["Terrain"] == "Domicile"]
+    aa = [r for r in ar if r["Terrain"] == "Extérieur"]
+    avg = lambda rows, key: sum(r[key] for r in rows)/len(rows) if rows else 0
+    lh = max(.05, 1.06*(.6*avg(hh, "BP") + .4*avg(aa, "BC"))) if len(hh)>=3 and len(aa)>=3 else max(.05, (avg(hr,"BP")+avg(ar,"BC"))/2)
+    la = max(.05, .94*(.6*avg(aa, "BP") + .4*avg(hh, "BC"))) if len(hh)>=3 and len(aa)>=3 else max(.05, (avg(ar,"BP")+avg(hr,"BC"))/2)
+    scores=[]; p1=px=p2=0
+    for i, pi in enumerate(pois(lh)):
+        for j, pj in enumerate(pois(la)):
+            p=pi*pj; scores.append((i,j,p))
+            if i>j: p1+=p
+            elif i==j: px+=p
+            else: p2+=p
+    total=p1+px+p2
+    return [p1/total, px/total, p2/total], sorted(scores,key=lambda x:x[2],reverse=True)[:2], lh, la
 
-@st.cache_data(ttl=1800, show_spinner=False)
-def team_recent(team_id, slug, team_name):
-    urls = [
-        f"{ESPN}/{slug}/teams/{quote(str(team_id))}/schedule",
-        f"{ESPN}/{slug}/teams/{quote(str(team_id))}/schedule?season={date.today().year}",
-    ]
-    for url in urls:
-        d=get_json(url)
-        rows=parse_schedule(d,team_name)
-        if rows:
-            return rows
-    return []
+def market_probs(odds):
+    inv=[1/x for x in odds]
+    return [x/sum(inv) for x in inv]
 
-def stats(rows):
-    if not rows:return None
-    weights=list(range(len(rows),0,-1)); den=sum(weights)
-    points=sum((3 if r["Résultat"]=="V" else 1 if r["Résultat"]=="N" else 0)*w for r,w in zip(rows,weights))
-    return {"forme":100*points/(3*den),"pour":sum(r["Buts marqués"]*w for r,w in zip(rows,weights))/den,"contre":sum(r["Buts encaissés"]*w for r,w in zip(rows,weights))/den,"n":len(rows)}
+with st.sidebar:
+    st.subheader("Sources à consulter")
+    st.markdown("- [Résultats et statistiques — Open-Matchday](https://github.com/oladeeayo/open-matchday)")
+    st.markdown("- [Blessures/suspensions — Transfermarkt](https://www.transfermarkt.com/)")
+    st.markdown("- [Compositions/statistiques — FotMob](https://www.fotmob.com/)")
+    st.caption("Les absences ne sont pas récupérées automatiquement : vérifie-les et saisis-les ci-dessous.")
+    league_name=st.selectbox("Championnat", list(LEAGUES))
+try:
+    with st.spinner("Chargement des données…"):
+        df=load_league(LEAGUES[league_name])
+except Exception as e:
+    st.error(str(e)); st.stop()
 
-def predict(home_rows, away_rows):
-    h,a=stats(home_rows),stats(away_rows)
-    if not h or not a:return None
-    lh=max(.15,min(3.5,.65*h["pour"]+.35*a["contre"]+.12))
-    la=max(.15,min(3.5,.65*a["pour"]+.35*h["contre"]))
-    def pois(l,k):return math.exp(-l)*l**k/math.factorial(k)
-    matrix=[(pois(lh,i)*pois(la,j),i,j) for i in range(8) for j in range(8)]
-    matrix.sort(reverse=True)
-    ph=sum(p for p,i,j in matrix if i>j); pn=sum(p for p,i,j in matrix if i==j); pa=sum(p for p,i,j in matrix if i<j); total=ph+pn+pa
-    return h,a,matrix[:2],(ph/total*100,pn/total*100,pa/total*100)
+teams=sorted(set(df.home.dropna().astype(str)) | set(df.away.dropna().astype(str)))
+st.subheader("1. Choisir le match")
+c1,c2=st.columns(2)
+home=c1.selectbox("Équipe à domicile", teams, index=0)
+away=c2.selectbox("Équipe à l'extérieur", teams, index=1 if len(teams)>1 else 0)
+c3,c4=st.columns(2)
+c3.date_input("Date du match", value=date.today())
+c4.time_input("Heure du match", value=time(17,0))
 
-with st.form("match"):
+st.subheader("2. Absences (à vérifier)")
+a1,a2=st.columns(2)
+with a1:
+    h_abs=st.number_input(f"Absents confirmés — {home}",0,25,0)
+    h_key=st.number_input(f"Titulaires importants absents — {home}",0,11,0)
+with a2:
+    a_abs=st.number_input(f"Absents confirmés — {away}",0,25,0)
+    a_key=st.number_input(f"Titulaires importants absents — {away}",0,11,0)
+checked=st.checkbox("J'ai vérifié les absences sur une source récente")
+
+st.subheader("3. Cotes (facultatif, mais utiles pour examiner les anomalies)")
+st.caption("Saisis les cotes décimales d'ouverture puis les cotes actuelles dans l'ordre 1-N-2. Exemple : 2.10, 3.20, 3.50.")
+with st.expander("Saisir les cotes"):
+    x1,x2,x3=st.columns(3)
+    oh=x1.number_input("Ouverture 1",0.0,1000.0,0.0,.05)
+    ox=x2.number_input("Ouverture N",0.0,1000.0,0.0,.05)
+    oa=x3.number_input("Ouverture 2",0.0,1000.0,0.0,.05)
+    y1,y2,y3=st.columns(3)
+    ch=y1.number_input("Actuelle 1",0.0,1000.0,0.0,.05)
+    cx=y2.number_input("Actuelle N",0.0,1000.0,0.0,.05)
+    ca=y3.number_input("Actuelle 2",0.0,1000.0,0.0,.05)
+
+if home == away:
+    st.warning("Choisis deux équipes différentes.")
+elif st.button("Analyser le match", type="primary", use_container_width=True):
+    hr, ar=matches(df,home), matches(df,away)
+    if not hr or not ar:
+        st.error("Pas assez de résultats récents pour une des équipes.")
+        st.stop()
+    probs, scores, lh, la=predict(hr,ar)
+    st.subheader("4. Forme récente")
     c1,c2=st.columns(2)
-    home=c1.text_input("Équipe à domicile",value="Paris Saint-Germain")
-    away=c2.text_input("Équipe à l'extérieur",value="Olympique Lyonnais")
-    c3,c4=st.columns(2); day=c3.date_input("Date du match",value=date.today()); tm=c4.time_input("Heure locale",value=time(20,30))
-    go=st.form_submit_button("🔎 Rechercher et analyser",use_container_width=True)
+    for col,name,rows in [(c1,home,hr),(c2,away,ar)]:
+        with col:
+            col.markdown(f"**{name}** — forme récent → ancien : {''.join(r['Résultat'] for r in rows)}")
+            col.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+            col.write(f"Buts marqués : {sum(r['BP'] for r in rows)} | encaissés : {sum(r['BC'] for r in rows)}")
+    st.subheader("5. Pronostic statistique")
+    c1,c2,c3=st.columns(3)
+    c1.metric(f"Victoire {home}",f"{probs[0]*100:.1f}%")
+    c2.metric("Match nul",f"{probs[1]*100:.1f}%")
+    c3.metric(f"Victoire {away}",f"{probs[2]*100:.1f}%")
+    c1,c2=st.columns(2)
+    c1.metric("Score probable 1",f"{scores[0][0]} – {scores[0][1]}",f"{scores[0][2]*100:.1f}%")
+    c2.metric("Score probable 2",f"{scores[1][0]} – {scores[1][1]}",f"{scores[1][2]*100:.1f}%")
+    st.write(f"Buts attendus estimés : {home} {lh:.2f} — {la:.2f} {away}")
 
-if go:
-    if not home.strip() or not away.strip(): st.error("Entre les deux équipes."); st.stop()
-    if norm(home)==norm(away): st.error("Choisis deux équipes différentes."); st.stop()
-    with st.spinner("Recherche des équipes et des derniers résultats sur ESPN…"):
-        ht=find_team(home.strip()); at=find_team(away.strip())
-        hr=team_recent(ht["id"],ht["slug"],ht["name"]) if ht else []
-        ar=team_recent(at["id"],at["slug"],at["name"]) if at else []
-    hn=ht["name"] if ht else home.strip(); an=at["name"] if at else away.strip()
-    st.subheader(f"{hn} — {an}"); st.caption(f"Date saisie : {day:%d/%m/%Y} · Heure locale : {tm:%H:%M}")
-    if ht: st.caption(f"Équipe domicile trouvée sur ESPN : {ht['league']}")
-    else: st.warning(f"ESPN n'a pas reconnu « {home} » dans les compétitions prises en charge.")
-    if at: st.caption(f"Équipe extérieure trouvée sur ESPN : {at['league']}")
-    else: st.warning(f"ESPN n'a pas reconnu « {away} » dans les compétitions prises en charge.")
-    result=predict(hr,ar)
-    if result:
-        h,a,scores,probs=result
-        st.subheader("📊 Pronostic statistique estimé")
-        st.caption("Calcul basé sur les derniers résultats récupérés, pondérés du plus récent au plus ancien. Ce n'est pas une garantie.")
-        x,y,z=st.columns(3); x.metric("Victoire domicile",f"{probs[0]:.1f}%"); y.metric("Match nul",f"{probs[1]:.1f}%"); z.metric("Victoire extérieur",f"{probs[2]:.1f}%")
-        x,y=st.columns(2); x.metric("Score probable 1",f"{scores[0][1]} - {scores[0][2]}"); y.metric("Score probable 2",f"{scores[1][1]} - {scores[1][2]}")
-        x,y=st.columns(2)
-        with x:
-            st.markdown(f"**{hn}**"); st.write(f"Matchs analysés : {h['n']}/10 · Forme pondérée : {h['forme']:.1f}/100"); st.write(f"Buts marqués/match : {h['pour']:.2f} · encaissés/match : {h['contre']:.2f}")
-            st.dataframe(pd.DataFrame(hr),use_container_width=True,hide_index=True)
-        with y:
-            st.markdown(f"**{an}**"); st.write(f"Matchs analysés : {a['n']}/10 · Forme pondérée : {a['forme']:.1f}/100"); st.write(f"Buts marqués/match : {a['pour']:.2f} · encaissés/match : {a['contre']:.2f}")
-            st.dataframe(pd.DataFrame(ar),use_container_width=True,hide_index=True)
+    st.subheader("6. Contrôle des absences")
+    if checked:
+        st.write(f"{home} : {h_abs} absent(s), dont {h_key} titulaire(s) important(s).")
+        st.write(f"{away} : {a_abs} absent(s), dont {a_key} titulaire(s) important(s).")
+        if h_key>=2 or a_key>=2:
+            st.warning("Plusieurs titulaires importants pourraient manquer : réévalue le pronostic après les compositions officielles.")
+        st.caption("Les absences sont affichées mais ne changent pas automatiquement les probabilités.")
     else:
-        st.error("Aucun score calculé : ESPN n'a pas fourni l'historique récent d'au moins une équipe. Aucun score fictif ne sera affiché.")
-        st.write(f"Résultats récupérés : {hn} = {len(hr)} match(s), {an} = {len(ar)} match(s).")
-    st.subheader("Sources et limites")
-    st.markdown("- [ESPN Soccer](https://www.espn.com/soccer/) : source principale de résultats dans cette version.")
-    st.markdown("- [FotMob](https://www.fotmob.com/) : source complémentaire à consulter manuellement.")
-    st.markdown("- [Transfermarkt](https://www.transfermarkt.com/) : vérification manuelle des absences/blessures.")
-    st.warning("La couverture d'ESPN varie selon les championnats. Les blessures, compositions et cotes ne sont pas automatiquement intégrées. Une variation de cote ne prouve pas qu'un match est truqué.")
-with st.expander("Compétitions prises en charge"):
-    st.write(", ".join(LEAGUES.keys()))
-    st.write("Aucune clé API n'est nécessaire. Les interfaces publiques peuvent changer ou être temporairement indisponibles.")
+        st.warning("Absences non vérifiées : le pronostic est incomplet.")
+
+    st.subheader("7. Indicateur de signaux inhabituels")
+    odds=[oh,ox,oa,ch,cx,ca]
+    if all(v>1 for v in odds):
+        op,cp=market_probs([oh,ox,oa]),market_probs([ch,cx,ca])
+        movement=max(abs(cp[i]-op[i]) for i in range(3))*100
+        gap=max(abs(cp[i]-probs[i]) for i in range(3))*100
+        risk=(2 if movement>=12 else 1 if movement>=7 else 0)+(1 if gap>=20 else 0)
+        label="Élevé — vérifier" if risk>=3 else "Moyen — vérifier" if risk==2 else "Faible" if risk==1 else "Aucun signal détecté avec les données saisies"
+        st.metric("Niveau de signal",label,f"Indice heuristique {risk}/3")
+        st.write(f"Variation maximale des probabilités de marché : {movement:.1f} points.")
+        st.write(f"Écart maximal entre modèle et marché : {gap:.1f} points.")
+        if movement>=7: st.warning("Variation notable des cotes : vérifie les compositions, blessures et actualités.")
+        if gap>=20: st.warning("Le modèle et les cotes divergent fortement : cela peut venir d'informations manquantes ou d'un modèle imparfait.")
+    else:
+        st.info("Pour examiner les mouvements du marché, renseigne les six cotes. Sans historique des cotes et volume des mises, la détection reste limitée.")
+    st.error("Important : cette analyse ne peut pas confirmer qu'un match est truqué. Une variation de cotes peut avoir des causes normales. Une enquête professionnelle nécessite des données de nombreux bookmakers et une vérification humaine.")
+
+st.divider()
+st.caption("Données de résultats : Open-Matchday (actualisation quotidienne, usage informatif non commercial). Les absences doivent être vérifiées manuellement. Aucun pronostic ne garantit un gain.")
