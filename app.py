@@ -13,19 +13,22 @@ LEAGUES={"Ligue 1 (France)":"fra.1","Premier League (Angleterre)":"eng.1","Liga 
 
 ALIASES = {
     "psg": "parissaintgermain",
-    "paris saint germain": "parissaintgermain",
     "parissaintgermain": "parissaintgermain",
     "parissaintgermainfc": "parissaintgermain",
+    "parissaintgermainfootballclub": "parissaintgermain",
     "ol": "lyon",
     "olympiquelyonnais": "lyon",
-    "olympiquelyonnais": "lyon",
+    "lyonnais": "lyon",
     "lyon": "lyon",
 }
 
 def norm(s):
-    s=str(s or "").lower().replace("saint-germain","saint germain")
-    s=re.sub(r"\b(fc|cf|sc|afc|club|olympique)\b", " ", s)
+    s=str(s or "").lower().replace("saint-germain", "saint germain")
     cleaned=re.sub(r"[^a-z0-9]", "", s)
+    # Apply aliases before stripping generic words so club names remain matchable.
+    if cleaned in ALIASES:
+        return ALIASES[cleaned]
+    cleaned=re.sub(r"(footballclub|fc|cf|sc|afc|club|olympique)$", "", cleaned)
     return ALIASES.get(cleaned, cleaned)
 
 def get_json(url):
@@ -43,10 +46,11 @@ def league_teams(slug):
         if isinstance(obj, dict):
             # Team objects can be nested at several levels in ESPN responses.
             if obj.get("id") and (obj.get("displayName") or obj.get("name")):
-                name=obj.get("displayName") or obj.get("name")
+                name=obj.get("displayName") or obj.get("shortDisplayName") or obj.get("name")
+                abbreviation=obj.get("abbreviation") or ""
                 key=(str(obj["id"]), name)
-                if key not in seen:
-                    seen.add(key); out.append({"id":str(obj["id"]),"name":name,"slug":slug})
+                if name and key not in seen:
+                    seen.add(key); out.append({"id":str(obj["id"]),"name":name,"abbreviation":abbreviation,"slug":slug})
             for value in obj.values(): walk(value)
         elif isinstance(obj, list):
             for value in obj: walk(value)
@@ -59,8 +63,9 @@ def find_team(name):
     for league_name,slug in LEAGUES.items():
         for t in league_teams(slug):
             n=norm(t["name"])
-            if n==wanted or (wanted and (wanted in n or n in wanted)):
-                candidates.append({**t,"league":league_name,"match": 3 if n==wanted else 1})
+            ab=norm(t.get("abbreviation", ""))
+            if n==wanted or ab==wanted or (wanted and (wanted in n or n in wanted)):
+                candidates.append({**t,"league":league_name,"match": 4 if ab==wanted else 3 if n==wanted else 1})
     if not candidates: return None
     candidates.sort(key=lambda x:x["match"],reverse=True)
     return candidates[0]
