@@ -5,8 +5,8 @@ from urllib.parse import quote
 
 st.set_page_config(page_title="Générateur de pronostics football", page_icon="⚽", layout="wide")
 st.title("⚽ Générateur de pronostics football")
-st.write("Analyse les résultats récents, la forme et les absences publiques disponibles. Aucune donnée manquante n’est inventée.")
-st.info("Les absences passent en priorité dans l’analyse lorsqu’une source publique les fournit. Les sources gratuites ne couvrent pas tous les clubs : une absence non trouvée ne signifie pas que l’équipe est au complet.")
+st.write("Choisis une compétition puis les deux équipes dans les listes. L’analyse utilise uniquement les résultats récupérés ; aucune donnée manquante n’est inventée.")
+st.info("Les absences sont présentées pour vérification, mais elles ne modifient jamais le pronostic sans ta confirmation.")
 HEADERS={"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36","Accept-Language":"fr-FR,fr;q=0.9,en;q=0.8"}
 ESPN="https://site.api.espn.com/apis/site/v2/sports/soccer"
 # ESPN public endpoints, no API key. Availability and coverage vary by competition.
@@ -165,37 +165,59 @@ def predict(home_rows, away_rows, home_absences=None, away_absences=None):
     # Le modèle commence par les buts réellement observés dans les matchs récents.
     lh=max(.15,min(3.5,.65*h["pour"]+.35*a["contre"]+.12))
     la=max(.15,min(3.5,.65*a["pour"]+.35*h["contre"]))
-    # Ajustement prudent seulement si la source indique clairement une indisponibilité.
-    # Sans information fiable sur l'importance du joueur, aucun statut de titulaire n'est inventé.
-    h_confirmed=confirmed_absences(home_absences)
-    a_confirmed=confirmed_absences(away_absences)
-    lh *= max(.70, 1 - .04*min(len(h_confirmed), 7))
-    la *= max(.70, 1 - .04*min(len(a_confirmed), 7))
+    # Conformément à la demande de l’utilisateur, les absences ne sont jamais appliquées automatiquement.
+    # Les rapports peuvent être affichés, mais ne changent pas les buts attendus sans confirmation explicite.
+    h_confirmed=[]
+    a_confirmed=[]
     def pois(l,k):return math.exp(-l)*l**k/math.factorial(k)
     matrix=[(pois(lh,i)*pois(la,j),i,j) for i in range(8) for j in range(8)]
     matrix.sort(reverse=True)
     ph=sum(p for p,i,j in matrix if i>j); pn=sum(p for p,i,j in matrix if i==j); pa=sum(p for p,i,j in matrix if i<j); total=ph+pn+pa
     return h,a,matrix[:2],(ph/total*100,pn/total*100,pa/total*100)
 
+st.subheader("1. Choisir la compétition et les équipes")
+competition = st.selectbox("Compétition", list(LEAGUES.keys()))
+slug_selected = LEAGUES[competition]
+with st.spinner("Chargement des équipes de la compétition…"):
+    teams = league_teams(slug_selected)
+teams = sorted({t["name"]: t for t in teams}.values(), key=lambda t: t["name"].casefold())
+if len(teams) >= 2:
+    team_by_name = {t["name"]: t for t in teams}
+    team_names = list(team_by_name.keys())
+    preferred_home = next((i for i, name in enumerate(team_names) if norm(name) == norm("AS Roma")), 0)
+    c1, c2 = st.columns(2)
+    home_name = c1.selectbox("Équipe à domicile", team_names, index=preferred_home)
+    away_options = [name for name in team_names if name != home_name]
+    preferred_away = next((i for i, name in enumerate(away_options) if norm(name) == norm("Cagliari")), 0)
+    away_name = c2.selectbox("Équipe à l'extérieur", away_options, index=preferred_away)
+    home_team_selected = team_by_name[home_name]
+    away_team_selected = team_by_name[away_name]
+else:
+    st.warning("Impossible de charger la liste des équipes de cette compétition pour le moment. Réessaie dans quelques instants.")
+    home_team_selected = None
+    away_team_selected = None
+
 with st.form("match"):
-    c1,c2=st.columns(2)
-    home=c1.text_input("Équipe à domicile",value="Paris Saint-Germain")
-    away=c2.text_input("Équipe à l'extérieur",value="Olympique Lyonnais")
-    c3,c4=st.columns(2); day=c3.date_input("Date du match",value=date.today()); tm=c4.time_input("Heure locale",value=time(20,30))
+    st.subheader("2. Informations du match")
+    c3,c4=st.columns(2)
+    day=c3.date_input("Date du match",value=date.today())
+    tm=c4.time_input("Heure locale",value=time(20,30))
     st.markdown("**Cotes actuelles uniquement (facultatif)** — ordre 1-N-2")
     o1,oN,o2=st.columns(3)
     odd_home=o1.number_input("Cote actuelle 1",min_value=0.0,value=0.0,step=0.05,format="%.2f",help="Laisse 0 si tu ne l'as pas.")
     odd_draw=oN.number_input("Cote actuelle N",min_value=0.0,value=0.0,step=0.05,format="%.2f",help="Laisse 0 si tu ne l'as pas.")
     odd_away=o2.number_input("Cote actuelle 2",min_value=0.0,value=0.0,step=0.05,format="%.2f",help="Laisse 0 si tu ne l'as pas.")
-    go=st.form_submit_button("🔎 Analyser le match",use_container_width=True)
+    go=st.form_submit_button("🔎 Analyser le match",use_container_width=True, disabled=len(teams)<2)
 
 if go:
-    if not home.strip() or not away.strip(): st.error("Entre les deux équipes."); st.stop()
-    if norm(home)==norm(away): st.error("Choisis deux équipes différentes."); st.stop()
+    if not home_team_selected or not away_team_selected:
+        st.error("La liste des équipes n’est pas disponible. Change de compétition ou réessaie."); st.stop()
+    if home_team_selected["id"] == away_team_selected["id"]:
+        st.error("Choisis deux équipes différentes."); st.stop()
     progress=st.progress(0, text="0 % — Préparation de l’analyse")
     status=st.empty()
-    status.write("Étape 1/4 : recherche des équipes…")
-    ht=find_team(home.strip()); at=find_team(away.strip())
+    status.write("Étape 1/4 : équipes sélectionnées dans la compétition…")
+    ht={**home_team_selected,"league":competition}; at={**away_team_selected,"league":competition}
     progress.progress(20, text="20 % — Équipes recherchées")
     status.write("Étape 2/4 : récupération des dix derniers résultats disponibles…")
     hr=team_recent(ht["id"],ht["slug"],ht["name"]) if ht else []
@@ -221,7 +243,7 @@ if go:
         st.caption("Calcul basé sur les derniers résultats récupérés, pondérés du plus récent au plus ancien. Ce n'est pas une garantie.")
         x,y,z=st.columns(3); x.metric("Victoire domicile",f"{probs[0]:.1f}%"); y.metric("Match nul",f"{probs[1]:.1f}%"); z.metric("Victoire extérieur",f"{probs[2]:.1f}%")
         x,y=st.columns(2); x.metric("Score probable 1",f"{scores[0][1]} - {scores[0][2]}"); y.metric("Score probable 2",f"{scores[1][1]} - {scores[1][2]}")
-        st.subheader("🚑 Absences et blessures — priorité de vérification")
+        st.subheader("🚑 Absences et blessures — à confirmer par toi")
         for team_label, injury_data in ((hn,hi),(an,ai)):
             st.markdown(f"**{team_label}**")
             if injury_data is None:
@@ -230,7 +252,7 @@ if go:
                 confirmed=confirmed_absences(injury_data)
                 st.write(f"Entrées de blessure trouvées : {len(injury_data)} · indisponibilités explicitement confirmées par le statut : {len(confirmed)}")
                 st.dataframe(pd.DataFrame(injury_data),use_container_width=True,hide_index=True)
-                st.caption("Le modèle n'ajuste les buts attendus que pour les statuts clairement indisponibles. Il ne devine pas si un joueur est titulaire ou important.")
+                st.caption("Ces informations sont affichées pour vérification uniquement. Aucune absence n’a été appliquée au calcul du score. Si tu veux les prendre en compte, confirme-le avant de relancer l’analyse.")
             else:
                 st.info("Aucune entrée d’absence retournée par ESPN. Ce n’est pas une preuve que l’équipe est au complet.")
         if all(v>1 for v in (odd_home,odd_draw,odd_away)):
@@ -268,4 +290,4 @@ if go:
     st.warning("La couverture d’ESPN varie selon les championnats. Les compositions officielles et les titulaires importants absents ne sont pas toujours disponibles. Les probabilités et scores restent des estimations, jamais des certitudes.")
 with st.expander("Compétitions prises en charge"):
     st.write(", ".join(LEAGUES.keys()))
-    st.write("Aucune clé API n'est nécessaire. Les interfaces publiques peuvent changer ou être temporairement indisponibles.")
+    st.write("Aucune clé API n'est nécessaire. La liste des clubs est chargée automatiquement selon la compétition choisie. Si ESPN ne fournit pas les équipes à un moment donné, réessaie plus tard.")
