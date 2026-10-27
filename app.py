@@ -334,4 +334,4 @@ if go:
             c1,c2,c3=st.columns(3)
             for col,label,mp,pp in zip((c1,c2,c3),("1 domicile","N nul","2 extérieur"),market,probs):
                 col.metric(label,f"Modèle {pp:.1f} %",f"Cotes ajustées {mp:.1f} %",delta_color="off")
-            st.caption("Les probabilités des cotes sont normalisées pour retirer approximativement la marge du bookmake
+            st.caption("Les probabilités des cotes sont normalisées pour retirer approximativement la marge du bookmaker.")
