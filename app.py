@@ -333,4 +333,4 @@ if go:
             st.subheader("📈 Comparaison avec les cotes actuelles")
             c1,c2,c3=st.columns(3)
             for col,label,mp,pp in zip((c1,c2,c3),("1 domicile","N nul","2 extérieur"),market,probs):
-                col.metric(label,f"Modèle {pp:.1f} %",f"Co
+                col.metric(label, f"Modèle {pp:.1f} %", f"Cotes ajustées {mp:.1f} %", delta_color="off")
