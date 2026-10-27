@@ -10,7 +10,7 @@ st.info("Nouvelle version : sélection des joueurs absents par leur nom. Coche u
 HEADERS={"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36","Accept-Language":"fr-FR,fr;q=0.9,en;q=0.8"}
 ESPN="https://site.api.espn.com/apis/site/v2/sports/soccer"
 # ESPN public endpoints, no API key. Availability and coverage vary by competition.
-LEAGUES={"Ligue 1 (France)":"fra.1","Premier League (Angleterre)":"eng.1","Liga (Espagne)":"esp.1","Serie A (Italie)":"ita.1","Bundesliga (Allemagne)":"ger.1","Ligue des champions":"uefa.champions","Ligue Europa":"uefa.europa","MLS (États-Unis)":"usa.1","Saudi Pro League":"ksa.1","World Cup":"fifa.world"}
+LEAGUES={"Ligue 1 (France)":"fra.1","Premier League (Angleterre)":"eng.1","Liga (Espagne)":"esp.1","Serie A (Italie)":"ita.1","Bundesliga (Allemagne)":"ger.1","Süper Lig (Turquie)":"tur.1","Super League (Grèce)":"gre.1","Premier League (Russie)":"rus.1","Superliga (Danemark)":"den.1","Eredivisie (Pays-Bas)":"ned.1","Ligue des champions":"uefa.champions","Ligue Europa":"uefa.europa","MLS (États-Unis)":"usa.1","Saudi Pro League":"ksa.1","Coupe du monde":"fifa.world"}
 
 ALIASES = {
     "psg": "parissaintgermain",
@@ -333,5 +333,4 @@ if go:
             st.subheader("📈 Comparaison avec les cotes actuelles")
             c1,c2,c3=st.columns(3)
             for col,label,mp,pp in zip((c1,c2,c3),("1 domicile","N nul","2 extérieur"),market,probs):
-                col.metric(label,f"Modèle {pp:.1f} %",f"Cotes ajustées {mp:.1f} %",delta_color="off")
-            st.caption("Les probabilités des cotes sont normalisées pour retirer approximativement la marge du bookmaker.")
+                col.metric(label,f"Modèle {pp:.1f} %",f"Co
