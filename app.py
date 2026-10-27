@@ -6,7 +6,7 @@ from urllib.parse import quote
 st.set_page_config(page_title="Générateur de pronostics football", page_icon="⚽", layout="wide")
 st.title("⚽ Générateur de pronostics football")
 st.write("Choisis une compétition puis les deux équipes dans les listes. L’analyse utilise uniquement les résultats récupérés ; aucune donnée manquante n’est inventée.")
-st.info("Les absences sont présentées pour vérification, mais elles ne modifient jamais le pronostic sans ta confirmation.")
+st.info("Nouvelle version : sélection des joueurs absents par leur nom. Coche uniquement les joueurs dont l’absence est confirmée.")
 HEADERS={"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36","Accept-Language":"fr-FR,fr;q=0.9,en;q=0.8"}
 ESPN="https://site.api.espn.com/apis/site/v2/sports/soccer"
 # ESPN public endpoints, no API key. Availability and coverage vary by competition.
@@ -140,6 +140,33 @@ def team_injuries(team_id, slug):
     walk(data)
     return found
 
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def team_roster(team_id, slug):
+    """Récupère l'effectif nommé quand l'endpoint ESPN le fournit."""
+    data = get_json(f"{ESPN}/{slug}/teams/{quote(str(team_id))}/roster")
+    if not data:
+        return []
+    found=[]; seen=set()
+    def walk(obj):
+        if isinstance(obj, dict):
+            # Roster entries usually carry an athlete object. Avoid treating arbitrary metadata as players.
+            athlete=obj.get("athlete") if isinstance(obj.get("athlete"),dict) else obj
+            name=athlete.get("fullName") or athlete.get("displayName") or athlete.get("name")
+            pid=athlete.get("id")
+            if name and (pid or "position" in athlete or "jersey" in athlete):
+                key=str(pid or name)
+                if key not in seen:
+                    seen.add(key)
+                    pos=athlete.get("position") or {}
+                    posname=pos.get("displayName") or pos.get("name") if isinstance(pos,dict) else str(pos or "")
+                    found.append({"name":str(name),"position":str(posname or "Poste non indiqué")})
+            for v in obj.values(): walk(v)
+        elif isinstance(obj,list):
+            for v in obj: walk(v)
+    walk(data)
+    return sorted(found,key=lambda x:x["name"].casefold())
+
 def stats(rows):
     if not rows:return None
     weights=list(range(len(rows),0,-1)); den=sum(weights)
@@ -197,8 +224,47 @@ else:
     home_team_selected = None
     away_team_selected = None
 
+# Les effectifs sont chargés selon les équipes choisies. Si ESPN ne les publie pas, aucun nom n'est inventé.
+if home_team_selected and away_team_selected:
+    st.subheader("2. Joueurs absents — sélection par nom")
+    st.caption("Ouvre chaque équipe et coche uniquement les joueurs dont l'absence est confirmée. Une liste indisponible ne signifie pas zéro absent.")
+    with st.expander(f"🚑 Absents — {home_team_selected['name']}", expanded=False):
+        roster_home = team_roster(home_team_selected["id"], home_team_selected["slug"])
+        injuries_home = team_injuries(home_team_selected["id"], home_team_selected["slug"]) or []
+        injury_names_home = {x.get("Joueur", "").casefold(): x.get("Information publiée", "") for x in injuries_home}
+        if roster_home:
+            absent_home = []
+            for player in roster_home:
+                label = f"{player['name']} — {player['position']}"
+                if st.checkbox(label, key=f"home_abs_{home_team_selected['id']}_{player['name']}"):
+                    absent_home.append(player['name'])
+                info = injury_names_home.get(player['name'].casefold())
+                if info:
+                    st.caption(f"Info publiée pour {player['name']} : {info}")
+            st.session_state["selected_home_absences"] = absent_home
+        else:
+            st.warning("L'effectif nommé n'est pas disponible via la source pour cette équipe. Aucun joueur ne sera inventé. Tu peux réessayer plus tard.")
+            st.session_state["selected_home_absences"] = []
+    with st.expander(f"🚑 Absents — {away_team_selected['name']}", expanded=False):
+        roster_away = team_roster(away_team_selected["id"], away_team_selected["slug"])
+        injuries_away = team_injuries(away_team_selected["id"], away_team_selected["slug"]) or []
+        injury_names_away = {x.get("Joueur", "").casefold(): x.get("Information publiée", "") for x in injuries_away}
+        if roster_away:
+            absent_away = []
+            for player in roster_away:
+                label = f"{player['name']} — {player['position']}"
+                if st.checkbox(label, key=f"away_abs_{away_team_selected['id']}_{player['name']}"):
+                    absent_away.append(player['name'])
+                info = injury_names_away.get(player['name'].casefold())
+                if info:
+                    st.caption(f"Info publiée pour {player['name']} : {info}")
+            st.session_state["selected_away_absences"] = absent_away
+        else:
+            st.warning("L'effectif nommé n'est pas disponible via la source pour cette équipe. Aucun joueur ne sera inventé. Tu peux réessayer plus tard.")
+            st.session_state["selected_away_absences"] = []
+
 with st.form("match"):
-    st.subheader("2. Informations du match")
+    st.subheader("3. Informations du match")
     c3,c4=st.columns(2)
     day=c3.date_input("Date du match",value=date.today())
     tm=c4.time_input("Heure locale",value=time(20,30))
@@ -243,7 +309,13 @@ if go:
         st.caption("Calcul basé sur les derniers résultats récupérés, pondérés du plus récent au plus ancien. Ce n'est pas une garantie.")
         x,y,z=st.columns(3); x.metric("Victoire domicile",f"{probs[0]:.1f}%"); y.metric("Match nul",f"{probs[1]:.1f}%"); z.metric("Victoire extérieur",f"{probs[2]:.1f}%")
         x,y=st.columns(2); x.metric("Score probable 1",f"{scores[0][1]} - {scores[0][2]}"); y.metric("Score probable 2",f"{scores[1][1]} - {scores[1][2]}")
-        st.subheader("🚑 Absences et blessures — à confirmer par toi")
+        st.subheader("🚑 Absences sélectionnées pour ce pronostic")
+        selected_h = st.session_state.get("selected_home_absences", [])
+        selected_a = st.session_state.get("selected_away_absences", [])
+        st.write(f"**{hn} :** " + (", ".join(selected_h) if selected_h else "aucun joueur coché"))
+        st.write(f"**{an} :** " + (", ".join(selected_a) if selected_a else "aucun joueur coché"))
+        st.warning("Les cases servent à identifier les absents que tu confirmes. Cette version n'applique pas encore de pénalité statistique individuelle par joueur, car la source ne garantit pas les titulaires ni leur impact. Ne coche pas un joueur simplement parce qu'il apparaît dans l'effectif.")
+        st.subheader("🚑 Rapports de blessures publiés — vérification")
         for team_label, injury_data in ((hn,hi),(an,ai)):
             st.markdown(f"**{team_label}**")
             if injury_data is None:
@@ -262,32 +334,4 @@ if go:
             c1,c2,c3=st.columns(3)
             for col,label,mp,pp in zip((c1,c2,c3),("1 domicile","N nul","2 extérieur"),market,probs):
                 col.metric(label,f"Modèle {pp:.1f} %",f"Cotes ajustées {mp:.1f} %",delta_color="off")
-            st.caption("Les probabilités des cotes sont normalisées pour retirer approximativement la marge du bookmaker. Les cotes d’ouverture ne sont pas utilisées.")
-        else:
-            st.caption("Cotes actuelles non renseignées ou incomplètes : la comparaison au marché est ignorée.")
-        x,y=st.columns(2)
-        with x:
-            h_home=[r for r in hr if r["Lieu"]=="Domicile"]
-            h_away=[r for r in hr if r["Lieu"]=="Extérieur"]
-            st.markdown(f"**{hn}**"); st.write(f"Matchs analysés : {h['n']}/10 · Forme pondérée : {h['forme']:.1f}/100"); st.write(f"Buts marqués/match : {h['pour']:.2f} · encaissés/match : {h['contre']:.2f}")
-            st.write(f"Dans ces 10 matchs : {len(h_home)} à domicile · {len(h_away)} à l’extérieur")
-            st.dataframe(pd.DataFrame(hr),use_container_width=True,hide_index=True)
-        with y:
-            a_home=[r for r in ar if r["Lieu"]=="Domicile"]
-            a_away=[r for r in ar if r["Lieu"]=="Extérieur"]
-            st.markdown(f"**{an}**"); st.write(f"Matchs analysés : {a['n']}/10 · Forme pondérée : {a['forme']:.1f}/100"); st.write(f"Buts marqués/match : {a['pour']:.2f} · encaissés/match : {a['contre']:.2f}")
-            st.write(f"Dans ces 10 matchs : {len(a_home)} à domicile · {len(a_away)} à l’extérieur")
-            st.dataframe(pd.DataFrame(ar),use_container_width=True,hide_index=True)
-    else:
-        progress.progress(100, text="100 % — Analyse terminée avec données insuffisantes")
-        status.warning("Analyse terminée, mais les données sont insuffisantes pour calculer un score fiable.")
-        st.error("Aucun score calculé : ESPN n'a pas fourni l'historique récent d'au moins une équipe. Aucun score fictif ne sera affiché.")
-        st.write(f"Résultats récupérés : {hn} = {len(hr)} match(s), {an} = {len(ar)} match(s).")
-    st.subheader("Sources et limites")
-    st.markdown("- [ESPN Soccer](https://www.espn.com/soccer/) : source principale de résultats dans cette version.")
-    st.markdown("- [FotMob](https://www.fotmob.com/) : source complémentaire à consulter manuellement.")
-    st.markdown("- [Transfermarkt](https://www.transfermarkt.com/) : vérification manuelle des absences/blessures.")
-    st.warning("La couverture d’ESPN varie selon les championnats. Les compositions officielles et les titulaires importants absents ne sont pas toujours disponibles. Les probabilités et scores restent des estimations, jamais des certitudes.")
-with st.expander("Compétitions prises en charge"):
-    st.write(", ".join(LEAGUES.keys()))
-    st.write("Aucune clé API n'est nécessaire. La liste des clubs est chargée automatiquement selon la compétition choisie. Si ESPN ne fournit pas les équipes à un moment donné, réessaie plus tard.")
+            st.caption("Les probabilités des cotes sont normalisées pour retirer approximativement la marge du bookmake
