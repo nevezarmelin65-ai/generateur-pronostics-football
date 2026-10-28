@@ -14,10 +14,10 @@ st.set_page_config(
 
 st.title("⚽ Générateur de pronostics football")
 st.write("Choisis une compétition et deux équipes. Les données manquantes ne sont pas inventées.")
-st.info("Les sources publiques peuvent être incomplètes. Un pronostic reste une estimation.")
+st.info("Les sources publiques peuvent être complètes. Un pronostic reste une estimation.")
 
 HEADERS = {"User-Agent": "Mozilla/5.0 FootballPredictionApp/1.0"}
-ESPN = "https://site.api.espn.com/apis/site/v2/sports/soccer"
+ESPN = "https://site.api.fotmob.com/apis/site/v2/sports/soccer"
 
 LEAGUES = {
     "Ligue 1 (France)": "fra.1",
@@ -209,7 +209,7 @@ def parse_schedule(data, team_name):
 def recent_results(team_id, slug, name):
     """
     Première méthode : calendrier de l'équipe.
-    Deuxième méthode : tableaux de scores ESPN sur les 180 derniers jours.
+    Deuxième méthode : tableaux de scores fotmob sur les 180 derniers jours.
     """
     schedule_urls = [
         f"{ESPN}/{slug}/teams/{quote(str(team_id))}/schedule",
@@ -572,7 +572,7 @@ if home_team and away_team:
                     ):
                         selected_away.append(player["name"])
             else:
-                st.warning("Effectif nommé indisponible via ESPN.")
+                st.warning("Effectif nommé indisponible via FOTMOB.")
 
 
 with st.form("match_form"):
@@ -673,7 +673,7 @@ if submitted and home_team and away_team:
         if not hr:
             st.warning(
                 "Aucun résultat exploitable pour l'équipe à domicile. "
-                "La source ESPN peut ne pas fournir son calendrier."
+                "La source FOTMOB peut ne pas fournir son calendrier."
             )
         else:
             st.dataframe(
@@ -685,7 +685,7 @@ if submitted and home_team and away_team:
         if not ar:
             st.warning(
                 "Aucun résultat exploitable pour l'équipe à l'extérieur. "
-                "La source ESPN peut ne pas fournir son calendrier."
+                "La source FOTMOB peut ne pas fournir son calendrier."
             )
         else:
             st.dataframe(
