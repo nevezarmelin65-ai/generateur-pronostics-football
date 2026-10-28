@@ -1,9 +1,7 @@
-
 import math
 import re
 from datetime import date, time, timedelta
 from urllib.parse import quote
-
 import pandas as pd
 import requests
 import streamlit as st
@@ -745,5 +743,5 @@ if submitted and home_team and away_team:
             f"**{home_team['name']} :** "
             f"{', '.join(selected_home) if selected_home else 'aucun joueur coché'}"
         )
-        st.write(
+        st.write()
    
