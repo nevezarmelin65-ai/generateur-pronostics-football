@@ -296,4 +296,4 @@ if submitted:
 
 st.divider()
 st.caption("Source : endpoints publics ESPN. Leur couverture varie selon les compétitions et les données disponibles.")
-        
+
