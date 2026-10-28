@@ -11,8 +11,8 @@ st.title("⚽ Générateur de pronostics football")
 st.write("Choisis une compétition et deux équipes. Les données manquantes ne sont pas inventées.")
 st.info("Les sources publiques peuvent être incomplètes. Un pronostic reste une estimation.")
 
-HEADERS = {"User-Agent": "Mozilla/5.0 FootballPredictionApp/1.0"}
-ESPN = "https://site.api.espn.com/apis/site/v2/sports/soccer"
+HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+ESPN = "https://espn.com"
 LEAGUES = {
     "Ligue 1 (France)": "fra.1", "Premier League (Angleterre)": "eng.1",
     "Liga (Espagne)": "esp.1", "Serie A (Italie)": "ita.1",
@@ -41,7 +41,6 @@ def league_teams(slug):
     data = get_json(f"{ESPN}/{slug}/teams?limit=1000") or {}
     found = {}
     
-    # Correction de l'extraction des équipes selon la structure réelle de l'API ESPN
     leagues_list = data.get("sports", [{}])[0].get("leagues", [{}])
     teams_list = leagues_list[0].get("teams", []) if leagues_list else []
     
@@ -52,7 +51,7 @@ def league_teams(slug):
         if tid and name:
             found[str(tid)] = {"id": str(tid), "name": str(name), "slug": slug}
             
-    if not found:  # Fallback sur ta fonction d'origine si structure différente
+    if not found:
         def walk(obj):
             if isinstance(obj, dict):
                 tid = obj.get("id")
@@ -77,6 +76,11 @@ def parse_schedule(data, team_name):
         competitions = event.get("competitions") or []
         if not competitions:
             continue
+        
+        status = competitions[0].get("status", {}).get("type", {}).get("name", "")
+        if status != "STATUS_FINAL":
+            continue
+            
         competitors = competitions[0].get("competitors") or []
         if len(competitors) < 2:
             continue
@@ -107,7 +111,6 @@ def parse_schedule(data, team_name):
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def recent_results(team_id, slug, name):
-    # Remplacement de l'URL morte par le endpoint général scoreboard qui contient tout l'historique de la saison en cours
     url = f"{ESPN}/{slug}/scoreboard?limit=300"
     rows = parse_schedule(get_json(url), name)
     if rows:
@@ -116,17 +119,16 @@ def recent_results(team_id, slug, name):
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def injuries(team_id, slug):
-    # Remplacement par le endpoint valide des blessures par équipe d'ESPN
-    data = get_json(f"{ESPN}/{slug}/teams/{quote(str(team_id))}")
+    url = f"https://espn.com{slug}/teams/{quote(str(team_id))}"
+    data = get_json(url)
     if not data:
-        return None
+        return []
     found, seen = [], set()
     
-    # On extrait les blessures de la structure valide de l'équipe
     for player in data.get("team", {}).get("injuries", []):
         name = player.get("athlete", {}).get("displayName") or player.get("displayName")
         status = player.get("status", "Indisponible")
-        details = player.get("comment", "")
+        details = player.get("comment", "Non spécifié")
         if name and (str(name), status) not in seen:
             seen.add((str(name), status))
             found.append({"Joueur": str(name), "Information publiée": f"{status} — {details}"})
@@ -151,13 +153,12 @@ def injuries(team_id, slug):
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def roster(team_id, slug):
-    # Remplacement de l'URL roster morte par l'appel de l'équipe qui embarque ses athlètes actifs
-    data = get_json(f"{ESPN}/{slug}/teams/{quote(str(team_id))}")
+    url = f"https://espn.com{slug}/teams/{quote(str(team_id))}"
+    data = get_json(url)
     if not data:
         return []
     found = {}
     
-    # Extraction propre depuis la fiche d'équipe
     for athlete in data.get("team", {}).get("athletes", []):
         name = athlete.get("fullName") or athlete.get("displayName")
         pid = athlete.get("id")
@@ -216,13 +217,23 @@ def predict(home_rows, away_rows):
     total = p1 + pn + p2
     return hs, aws, matrix[:2], (p1 / total * 100, pn / total * 100, p2 / total * 100)
 
+# --- FIN DU CODE D'ORIGINE / INTERFACE COMPLÈTE ---
 st.subheader("1. Compétition et équipes")
 competition = st.selectbox("Compétition", list(LEAGUES))
 slug = LEAGUES[competition]
+
 with st.spinner("Chargement des équipes…"):
     teams = league_teams(slug)
+
 if len(teams) >= 2:
     by_name = {t["name"]: t for t in teams}
     names = list(by_name)
+    
     c1, c2 = st.columns(2)
     home_name = c1.selectbox("Équipe à domicile", names)
+    away_name = c2.selectbox("Équipe à l'extérieur", names, index=1 if len(names) > 1 else 0)
+    
+    home_team = by_name[home_name]
+    away_team = by_name[away_name]
+    
+    # 2. Gestion et sélection des Joueurs Absents
