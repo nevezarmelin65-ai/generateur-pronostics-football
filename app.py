@@ -684,3 +684,74 @@ st.caption(
     "avant toute décision."
     )
     
+# =========================
+# MODULE : SELECTION MANUELLE DES ABSENTS
+# =========================
+
+st.subheader("7. Sélection des joueurs absents")
+
+st.info(
+    "Coche les joueurs absents pour chaque équipe. "
+    "Cette sélection est manuelle : vérifie les informations avant le match."
+)
+
+col_home, col_away = st.columns(2)
+
+with col_home:
+    st.markdown("### Équipe à domicile")
+    home_roster_text = st.text_area(
+        "Liste des joueurs à domicile (un nom par ligne)",
+        key="home_roster_text",
+        placeholder="Colle ici les noms des joueurs..."
+    )
+
+with col_away:
+    st.markdown("### Équipe à l'extérieur")
+    away_roster_text = st.text_area(
+        "Liste des joueurs à l'extérieur (un nom par ligne)",
+        key="away_roster_text",
+        placeholder="Colle ici les noms des joueurs..."
+    )
+
+home_players = [
+    name.strip()
+    for name in home_roster_text.splitlines()
+    if name.strip()
+]
+
+away_players = [
+    name.strip()
+    for name in away_roster_text.splitlines()
+    if name.strip()
+]
+
+home_absent = []
+away_absent = []
+
+col_home, col_away = st.columns(2)
+
+with col_home:
+    st.markdown("**Coche les absents à domicile**")
+    for i, player in enumerate(home_players):
+        if st.checkbox(player, key=f"home_absent_{i}_{player}"):
+            home_absent.append(player)
+
+with col_away:
+    st.markdown("**Coche les absents à l'extérieur**")
+    for i, player in enumerate(away_players):
+        if st.checkbox(player, key=f"away_absent_{i}_{player}"):
+            away_absent.append(player)
+
+st.write(f"Absents à domicile : {len(home_absent)}")
+st.write(f"Absents à l'extérieur : {len(away_absent)}")
+
+with st.expander("Vérifier les sélections"):
+    st.write("Absents à domicile :", home_absent or "Aucun sélectionné")
+    st.write("Absents à l'extérieur :", away_absent or "Aucun sélectionné")
+
+st.caption(
+    "Pour le moment, ce module affiche et mémorise les sélections "
+    "pendant la session. Les absences ne sont pas encore intégrées "
+    "au calcul des probabilités."
+)
+
