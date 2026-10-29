@@ -272,3 +272,225 @@ def load_openfootball_results(slugs, target_iso):
             )
 
     return matches, errors
+
+def match_team_name(candidate, requested):
+    a = normalize(candidate)
+    b = normalize(requested)
+
+    if not a or not b:
+        return False
+
+    if a == b:
+        return True
+
+    return min(len(a), len(b)) >= 6 and (a in b or b in a)
+
+
+def team_history(matches, team, venue=None, limit=10):
+    rows = []
+
+    for match in matches:
+        home = match_team_name(match["domicile"], team)
+        away = match_team_name(match["exterieur"], team)
+
+        if home == away:
+            continue
+
+        if not home and not away:
+            continue
+
+        if venue == "domicile" and not home:
+            continue
+
+        if venue == "extérieur" and not away:
+            continue
+
+        if home:
+            scored = match["buts_dom"]
+            conceded = match["buts_ext"]
+            opponent = match["exterieur"]
+            location = "Domicile"
+        else:
+            scored = match["buts_ext"]
+            conceded = match["buts_dom"]
+            opponent = match["domicile"]
+            location = "Extérieur"
+
+        result = (
+            "V" if scored > conceded
+            else "N" if scored == conceded
+            else "D"
+        )
+
+        rows.append({
+            "Date": match["date"],
+            "Adversaire": opponent,
+            "Lieu": location,
+            "Buts marqués": scored,
+            "Buts encaissés": conceded,
+            "Résultat": result,
+            "Source": match["source"],
+        })
+
+    rows.sort(key=lambda row: row["Date"], reverse=True)
+    return rows[:limit]
+
+
+def weighted_stats(rows):
+    if not rows:
+        return None
+
+    # Les matchs les plus récents pèsent davantage.
+    weights = list(range(len(rows), 0, -1))
+    denominator = sum(weights)
+
+    goals_for = sum(
+        row["Buts marqués"] * weight
+        for row, weight in zip(rows, weights)
+    ) / denominator
+
+    goals_against = sum(
+        row["Buts encaissés"] * weight
+        for row, weight in zip(rows, weights)
+    ) / denominator
+
+    points = sum(
+        (
+            3 if row["Résultat"] == "V"
+            else 1 if row["Résultat"] == "N"
+            else 0
+        ) * weight
+        for row, weight in zip(rows, weights)
+    ) / denominator
+
+    return {
+        "nombre": len(rows),
+        "forme": points / 3 * 100,
+        "marques": goals_for,
+        "encaisses": goals_against,
+        "sans_encaisser": (
+            sum(row["Buts encaissés"] == 0 for row in rows)
+            / len(rows) * 100
+        ),
+    }
+
+
+def predict(home_rows, away_rows):
+    # Il faut au moins trois matchs par équipe.
+    if len(home_rows) < 3 or len(away_rows) < 3:
+        return None
+
+    hs = weighted_stats(home_rows)
+    aws = weighted_stats(away_rows)
+
+    home_venue = [
+        row for row in home_rows
+        if row["Lieu"] == "Domicile"
+    ]
+    away_venue = [
+        row for row in away_rows
+        if row["Lieu"] == "Extérieur"
+    ]
+
+    hvs = (
+        weighted_stats(home_venue)
+        if len(home_venue) >= 3 else hs
+    )
+    avs = (
+        weighted_stats(away_venue)
+        if len(away_venue) >= 3 else aws
+    )
+
+    expected_home = max(
+        0.15,
+        min(
+            3.8,
+            0.55 * hvs["marques"]
+            + 0.35 * avs["encaisses"]
+            + 0.15
+        )
+    )
+
+    expected_away = max(
+        0.15,
+        min(
+            3.8,
+            0.55 * avs["marques"]
+            + 0.35 * hvs["encaisses"]
+        )
+    )
+
+    matrix = [
+        (
+            poisson(expected_home, i)
+            * poisson(expected_away, j),
+            i,
+            j,
+        )
+        for i in range(8)
+        for j in range(8)
+    ]
+
+    p1 = sum(p for p, i, j in matrix if i > j)
+    pn = sum(p for p, i, j in matrix if i == j)
+    p2 = sum(p for p, i, j in matrix if i < j)
+
+    total = p1 + pn + p2
+
+    return {
+        "home_stats": hs,
+        "away_stats": aws,
+        "scores": sorted(matrix, reverse=True)[:5],
+        "probabilities": (
+            p1 / total * 100,
+            pn / total * 100,
+            p2 / total * 100,
+        ),
+        "expected_goals": (expected_home, expected_away),
+        "home_venue_count": len(home_venue),
+        "away_venue_count": len(away_venue),
+    }
+
+
+def fetch_matches(league, target):
+    matches = []
+    errors = []
+
+    if league in LEAGUES:
+        code = LEAGUES[league]
+
+        csv_matches, csv_errors = load_csv_results(
+            code, target.isoformat()
+        )
+        matches.extend(csv_matches)
+        errors.extend(csv_errors)
+
+    elif league in OPENFOOTBALL_LEAGUES:
+        of_matches, of_errors = load_openfootball_results(
+            tuple(OPENFOOTBALL_LEAGUES[league]),
+            target.isoformat(),
+        )
+        matches.extend(of_matches)
+        errors.extend(of_errors)
+
+    unique = {}
+
+    for match in matches:
+        key = (
+            match["date"],
+            normalize(match["domicile"]),
+            normalize(match["exterieur"]),
+            match["buts_dom"],
+            match["buts_ext"],
+        )
+        unique.setdefault(key, match)
+
+    return (
+        sorted(
+            unique.values(),
+            key=lambda item: item["date"],
+            reverse=True,
+        ),
+        errors,
+)
+               
