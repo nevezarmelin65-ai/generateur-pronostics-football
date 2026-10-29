@@ -168,56 +168,6 @@ with c4:
     match_time = st.time_input("Heure locale", value=time(17, 0))
 
 if home == away:
-    
-st.header("2. Sélection des joueurs absents")
-
-st.caption(
-    "Saisis les effectifs connus. Une case à cocher apparaîtra pour "
-    "chaque joueur que tu pourras déclarer absent."
-)
-
-col_home, col_away = st.columns(2)
-
-with col_home:
-    st.subheader(f"🏠 {home}")
-    roster_home_text = st.text_area(
-        "Effectif — équipe à domicile",
-        placeholder="Un joueur par ligne\nExemple :\nJoueur 1\nJoueur 2",
-        key="roster_home",
-    )
-    roster_home = list(dict.fromkeys(
-        name.strip()
-        for name in roster_home_text.splitlines()
-        if name.strip()
-    ))
-    absent_home = []
-    for i, player in enumerate(roster_home):
-        if st.checkbox(
-            f"{player} — absent",
-            key=f"abs_home_{i}_{player}",
-        ):
-            absent_home.append(player)
-
-with col_away:
-    st.subheader(f"✈️ {away}")
-    roster_away_text = st.text_area(
-        "Effectif — équipe à l'extérieur",
-        placeholder="Un joueur par ligne\nExemple :\nJoueur 1\nJoueur 2",
-        key="roster_away",
-    )
-    roster_away = list(dict.fromkeys(
-        name.strip()
-        for name in roster_away_text.splitlines()
-        if name.strip()
-    ))
-    absent_away = []
-    for i, player in enumerate(roster_away):
-        if st.checkbox(
-            f"{player} — absent",
-            key=f"abs_away_{i}_{player}",
-        ):
-            absent_away.append(player)
-    
     st.warning("Choisis deux équipes différentes.")
 elif st.button("Analyser le match", type="primary", use_container_width=True):
     hrows = team_matches(df, home)
