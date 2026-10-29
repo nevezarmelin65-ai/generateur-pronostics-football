@@ -375,7 +375,12 @@ def weighted_stats(rows):
     }
 
 
-def predict(home_rows, away_rows):
+
+def predict(home_rows, away_rows, home_absent=None, away_absent=None):
+    # Normaliser les listes d'absents.
+    home_absent = home_absent or []
+    away_absent = away_absent or []
+
     # Il faut au moins trois matchs par équipe.
     if len(home_rows) < 3 or len(away_rows) < 3:
         return None
@@ -449,7 +454,10 @@ def predict(home_rows, away_rows):
         "expected_goals": (expected_home, expected_away),
         "home_venue_count": len(home_venue),
         "away_venue_count": len(away_venue),
+        "home_absent": home_absent,
+        "away_absent": away_absent,
     }
+    
 
 
 def fetch_matches(league, target):
