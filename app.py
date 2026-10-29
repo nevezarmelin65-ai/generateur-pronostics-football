@@ -258,6 +258,24 @@ elif st.button("Analyser le match", type="primary", use_container_width=True):
         col.metric("Score estimé", f"{gh} – {ga}", f"{p*100:.1f}% selon le modèle")
     st.write(f"Buts attendus estimés : **{home} {pred['lh']:.2f} — {pred['la']:.2f} {away}**")
     st.subheader("4. Limites")
+   
+    st.subheader("5. Joueurs déclarés absents")
+
+    c1, c2 = st.columns(2)
+
+    with c1:
+        st.write(f"**{home}**")
+        st.write(", ".join(absent_home) if absent_home else "Aucun absent sélectionné")
+
+    with c2:
+        st.write(f"**{away}**")
+        st.write(", ".join(absent_away) if absent_away else "Aucun absent sélectionné")
+
+    st.warning(
+        "Les absences sélectionnées sont affichées à titre informatif. "
+        "Elles ne modifient pas encore les probabilités du modèle."
+    )
+    
     st.markdown(
         "- Les pourcentages sont des estimations, pas des garanties.\n"
         "- Les données sont actualisées quotidiennement, pas en direct.\n"
