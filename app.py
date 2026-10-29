@@ -494,3 +494,194 @@ def fetch_matches(league, target):
         errors,
 )
                
+
+# =========================
+# PARTIE 4/4 : INTERFACE
+# =========================
+
+st.subheader("1. Choisir la compétition")
+
+league = st.selectbox("Compétition", ALL_LEAGUES)
+
+col1, col2 = st.columns(2)
+
+with col1:
+    home_name = st.text_input("Équipe à domicile", placeholder="Ex. : PSG")
+
+with col2:
+    away_name = st.text_input("Équipe à l'extérieur", placeholder="Ex. : Lyon")
+
+match_date = st.date_input("Date du match")
+match_time = st.time_input("Heure locale du match")
+
+with st.expander("Cotes des bookmakers (facultatif)"):
+    odd_home = st.number_input(
+        "Cote victoire domicile", min_value=0.0, value=0.0, step=0.05
+    )
+    odd_draw = st.number_input(
+        "Cote match nul", min_value=0.0, value=0.0, step=0.05
+    )
+    odd_away = st.number_input(
+        "Cote victoire extérieur", min_value=0.0, value=0.0, step=0.05
+    )
+
+if st.button("⚽ Analyser le match", type="primary"):
+    if not home_name.strip() or not away_name.strip():
+        st.error("Saisis les noms des deux équipes.")
+    elif normalize(home_name) == normalize(away_name):
+        st.error("Choisis deux équipes différentes.")
+    else:
+        with st.spinner("Recherche des résultats disponibles..."):
+            matches, errors = fetch_matches(league)
+
+        home_rows = team_history(matches, home_name, limit=10)
+        away_rows = team_history(matches, away_name, limit=10)
+
+        st.subheader("2. Vérification des données")
+        st.write(f"Compétition sélectionnée : **{league}**")
+        st.write(f"Match à analyser : **{home_name} – {away_name}**")
+        st.write(f"Date prévue : **{match_date} à {match_time}**")
+        st.write(f"Résultats récupérés : **{len(matches)}**")
+        st.write(f"Matchs trouvés pour {home_name} : **{len(home_rows)}**")
+        st.write(f"Matchs trouvés pour {away_name} : **{len(away_rows)}**")
+
+        if errors:
+            with st.expander("Sources et éventuels problèmes"):
+                for error in errors:
+                    st.warning(error)
+
+        result = predict(home_rows, away_rows)
+
+        if result is None:
+            st.warning(
+                "Données insuffisantes pour produire une prédiction fiable. "
+                "Il faut au minimum 3 résultats exploitables pour chaque équipe. "
+                "Aucun score ne sera inventé."
+            )
+        else:
+            st.subheader("3. Probabilités du résultat")
+
+            probs = result["probabilities"]
+            c1, c2, c3 = st.columns(3)
+
+            c1.metric("Victoire domicile", f'{probs["1"]:.1f}%')
+            c2.metric("Match nul", f'{probs["N"]:.1f}%')
+            c3.metric("Victoire extérieur", f'{probs["2"]:.1f}%')
+
+            st.caption(
+                "Ces pourcentages sont des estimations statistiques, "
+                "pas des garanties de résultat."
+            )
+
+            st.subheader("4. Scores exacts les plus probables")
+
+            score_cols = st.columns(min(3, len(result["scores"])))
+
+            for index, (score, probability) in enumerate(result["scores"][:3]):
+                score_cols[index].metric(
+                    f"Option {index + 1}",
+                    score,
+                    f"{probability:.1f}% estimés"
+                )
+
+            st.write(
+                f"Buts attendus — {home_name} : "
+                f'**{result["lambda_home"]:.2f}**'
+            )
+            st.write(
+                f"Buts attendus — {away_name} : "
+                f'**{result["lambda_away"]:.2f}**'
+            )
+
+            st.subheader("5. Forme récente et statistiques")
+
+            stats_data = []
+
+            for team, history in [
+                (home_name, home_rows),
+                (away_name, away_rows)
+            ]:
+                stats = weighted_stats(history)
+
+                if stats:
+                    stats_data.append({
+                        "Équipe": team,
+                        "Matchs analysés": stats["played"],
+                        "Victoires": stats["wins"],
+                        "Nuls": stats["draws"],
+                        "Défaites": stats["losses"],
+                        "Buts marqués/match": round(stats["scored"], 2),
+                        "Buts encaissés/match": round(stats["conceded"], 2)
+                    })
+
+            if stats_data:
+                st.dataframe(
+                    pd.DataFrame(stats_data),
+                    use_container_width=True,
+                    hide_index=True
+                )
+
+            with st.expander(f"Historique récent — {home_name}"):
+                if home_rows:
+                    st.dataframe(
+                        pd.DataFrame(home_rows),
+                        use_container_width=True,
+                        hide_index=True
+                    )
+                else:
+                    st.info("Aucun résultat récent trouvé pour cette équipe.")
+
+            with st.expander(f"Historique récent — {away_name}"):
+                if away_rows:
+                    st.dataframe(
+                        pd.DataFrame(away_rows),
+                        use_container_width=True,
+                        hide_index=True
+                    )
+                else:
+                    st.info("Aucun résultat récent trouvé pour cette équipe.")
+
+            odds = [odd_home, odd_draw, odd_away]
+
+            if all(odd > 1.0 for odd in odds):
+                implied = [100 / odd for odd in odds]
+                total = sum(implied)
+
+                st.subheader("6. Comparaison indicative des cotes")
+                st.write(
+                    "Probabilités brutes implicites des cotes, "
+                    "avant correction de la marge du bookmaker :"
+                )
+
+                odds_data = pd.DataFrame({
+                    "Résultat": [
+                        "Victoire domicile",
+                        "Match nul",
+                        "Victoire extérieur"
+                    ],
+                    "Cote": odds,
+                    "Probabilité brute (%)": [
+                        round(value, 1) for value in implied
+                    ],
+                    "Probabilité normalisée (%)": [
+                        round(value / total * 100, 1)
+                        for value in implied
+                    ]
+                })
+
+                st.dataframe(
+                    odds_data,
+                    use_container_width=True,
+                    hide_index=True
+                )
+
+st.divider()
+
+st.caption(
+    "Sources prévues : football-data.co.uk et OpenFootball. "
+    "La disponibilité dépend de la compétition et des fichiers accessibles. "
+    "Les absences, compositions officielles et cotes en direct ne sont pas "
+    "automatiquement confirmées par cette version. Vérifie les données "
+    "avant toute décision."
+        )
+    
