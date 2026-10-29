@@ -557,7 +557,12 @@ if st.button("⚽ Analyser le match", type="primary"):
                 for error in errors:
                     st.warning(error)
 
-        result = predict(home_rows, away_rows)
+        result = predict(
+    home_rows,
+    away_rows,
+    home_absent=home_absent,
+    away_absent=away_absent,
+        )
 
         if result is None:
             st.warning(
