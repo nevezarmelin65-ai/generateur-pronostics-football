@@ -1,687 +1,220 @@
 import math
-import re
-import unicodedata
 from datetime import date, time
 from io import StringIO
+
 import pandas as pd
 import requests
 import streamlit as st
 
-st.set_page_config(
-    page_title="Générateur de pronostics football",
-    page_icon="⚽",
-    layout="wide",
-)
+BASE = "https://raw.githubusercontent.com/oladeeayo/open-matchday/master/data"
+TIMEOUT = 25
 
-st.title("⚽ Générateur de pronostics football")
-st.write("Analyse statistique des matchs à partir de résultats publics.")
-st.info(
-    "Les probabilités sont des estimations. "
-    "Les données indisponibles ne sont jamais inventées."
-)
-
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 FootballPredictionApp/4.0"
-}
-TIMEOUT = 12
-
-FD_BASE = "https://www.football-data.co.uk/mmz4281"
-OPENFOOTBALL_BASE = (
-    "https://raw.githubusercontent.com/openfootball/football.json/master"
-)
-
-# Compétitions couvertes par football-data.co.uk
 LEAGUES = {
-    "Angleterre - Premier League": "E0",
-    "Angleterre - Championship": "E1",
-    "Écosse - Premiership": "SC0",
-    "Allemagne - Bundesliga": "D1",
-    "Allemagne - 2. Bundesliga": "D2",
-    "Italie - Serie A": "I1",
-    "Italie - Serie B": "I2",
-    "Espagne - La Liga": "SP1",
-    "Espagne - Segunda División": "SP2",
-    "France - Ligue 1": "F1",
-    "France - Ligue 2": "F2",
-    "Pays-Bas - Eredivisie": "N1",
-    "Belgique - Pro League": "B1",
-    "Portugal - Primeira Liga": "P1",
-    "Turquie - Süper Lig": "T1",
-    "Grèce - Super League": "G1",
+    "Angleterre — Premier League": "ENG_1_premier-league",
+    "Angleterre — Championship": "ENG_2_championship",
+    "Espagne — La Liga": "ESP_1_la-liga",
+    "Allemagne — Bundesliga": "GER_1_bundesliga",
+    "Italie — Serie A": "ITA_1_serie-a",
+    "France — Ligue 1": "FRA_1_ligue-1",
+    "France — Ligue 2": "FRA_2_ligue-2",
+    "Pays-Bas — Eredivisie": "NED_1_eredivisie",
+    "Portugal — Primeira Liga": "POR_1_primeira-liga",
+    "Belgique — Pro League": "BEL_1_pro-league",
+    "Turquie — Süper Lig": "TUR_1_super-lig",
+    "Grèce — Super League": "GRE_1_super-league",
+    "États-Unis — MLS": "USA_1_mls",
+    "Brésil — Serie A": "BRA_1_serie-a",
+    "UEFA — Ligue des champions": "UEFA_1_champions-league",
+    "UEFA — Ligue Europa": "UEFA_2_europa-league",
+    "UEFA — Ligue Conférence": "UEFA_3_conference-league",
 }
 
-# Sources complémentaires à vérifier selon la compétition
-OPENFOOTBALL_LEAGUES = {
-    "Ligue des champions": ["uefa-champions-league"],
-    "Ligue Europa": ["uefa-europa-league"],
-    "États-Unis - MLS": ["usa"],
-    "Arabie saoudite - Saudi Pro League": ["saudi-arabia"],
-    "Danemark - Superliga": ["denmark"],
-    "Russie - Premier League": ["russia"],
-    "Coupe du monde": ["world-cup"],
-    "Brésil - Série A": ["brazil"],
-    "Mexique - Liga MX": ["mexico"],
-}
+st.set_page_config(page_title="Pronostics football", page_icon="⚽", layout="wide")
+st.title("⚽ Générateur de pronostics football")
+st.caption("Version sans clé API — forme récente et estimations statistiques.")
+st.info("Les données proviennent de fichiers CSV publics actualisés quotidiennement. Ce n'est pas du direct et la couverture varie selon le championnat.")
 
-ALL_LEAGUES = list(LEAGUES) + list(OPENFOOTBALL_LEAGUES)
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_csv(url: str) -> pd.DataFrame:
+    response = requests.get(url, timeout=TIMEOUT)
+    response.raise_for_status()
+    return pd.read_csv(StringIO(response.text))
 
-
-def normalize(value):
-    value = unicodedata.normalize("NFKD", str(value or ""))
-    value = value.encode("ascii", "ignore").decode("ascii")
-    return re.sub(r"[^a-z0-9]", "", value.lower())
-
-
-def season_codes(target):
-    """Retourne les deux saisons récentes."""
-    start = target.year if target.month >= 7 else target.year - 1
-    return [
-        f"{year % 100:02d}{(year + 1) % 100:02d}"
-        for year in (start, start - 1)
-    ]
-
-
-def poisson(lam, goals):
-    return math.exp(-lam) * lam**goals / math.factorial(goals)
-
-@st.cache_data(ttl=1800, show_spinner=False)
-def load_csv_results(league_code, target_iso):
-    target = date.fromisoformat(target_iso)
+def load_league(slug: str) -> pd.DataFrame:
     frames = []
-    errors = []
-
-    for season in season_codes(target):
-        url = f"{FD_BASE}/{season}/{league_code}.csv"
-
+    for season in ("2627", "2526"):
+        url = f"{BASE}/{slug}/results_{season}.csv"
         try:
-            response = requests.get(
-                url, headers=HEADERS, timeout=TIMEOUT
-            )
-            response.raise_for_status()
-
-            if not response.text.strip():
-                errors.append(f"{season}: fichier vide")
+            df = load_csv(url)
+            required = {"date", "home", "away", "ft_home", "ft_away"}
+            if df.empty or not required.issubset(df.columns):
                 continue
-
-            df = pd.read_csv(
-                StringIO(response.text),
-                on_bad_lines="skip"
-            )
-
-            required = {
-                "HomeTeam", "AwayTeam", "FTHG", "FTAG", "Date"
-            }
-            if not required.issubset(df.columns):
-                errors.append(f"{season}: colonnes manquantes")
-                continue
-
-            df["_date"] = pd.to_datetime(
-                df["Date"], dayfirst=True, errors="coerce"
-            )
-            df["_hg"] = pd.to_numeric(df["FTHG"], errors="coerce")
-            df["_ag"] = pd.to_numeric(df["FTAG"], errors="coerce")
-
-            df = df.dropna(
-                subset=[
-                    "_date", "_hg", "_ag",
-                    "HomeTeam", "AwayTeam"
-                ]
-            )
-
-            # Ne conserver que les matchs antérieurs à l'analyse.
-            df = df[df["_date"].dt.date < target]
+            df["date"] = pd.to_datetime(df["date"], errors="coerce")
+            df["ft_home"] = pd.to_numeric(df["ft_home"], errors="coerce")
+            df["ft_away"] = pd.to_numeric(df["ft_away"], errors="coerce")
+            df = df.dropna(subset=["date", "home", "away", "ft_home", "ft_away"])
             frames.append(df)
-
-        except Exception as exc:
-            errors.append(
-                f"{season}: {type(exc).__name__}: {exc}"
-            )
-
+        except Exception:
+            continue
     if not frames:
-        return [], errors or ["Aucun résultat exploitable."]
+        raise RuntimeError("Aucun fichier de résultats disponible pour ce championnat. Essaie un autre championnat.")
+    result = pd.concat(frames, ignore_index=True)
+    result = result.drop_duplicates(subset=["date", "home", "away"], keep="last")
+    return result.sort_values("date", ascending=False)
 
-    df = pd.concat(frames, ignore_index=True)
-    df = df.drop_duplicates(
-        subset=["_date", "HomeTeam", "AwayTeam", "_hg", "_ag"]
-    )
-    df = df.sort_values("_date", ascending=False)
-
-    matches = []
-
-    for _, row in df.iterrows():
-        matches.append({
-            "date": row["_date"].date(),
-            "domicile": str(row["HomeTeam"]),
-            "exterieur": str(row["AwayTeam"]),
-            "buts_dom": int(row["_hg"]),
-            "buts_ext": int(row["_ag"]),
-            "source": "football-data.co.uk",
-        })
-
-    return matches, errors
-
-
-def parse_openfootball_matches(data, target):
-    matches = []
-
-    if not isinstance(data, dict):
-        return matches
-
-    for item in data.get("matches", []):
-        if not isinstance(item, dict):
-            continue
-
-        raw_date = item.get("date")
-        if not raw_date:
-            continue
-
-        parsed_date = pd.to_datetime(
-            raw_date, errors="coerce"
-        )
-        if pd.isna(parsed_date):
-            continue
-
-        match_date = parsed_date.date()
-        if match_date >= target:
-            continue
-
-        home = item.get("team1") or item.get("homeTeam")
-        away = item.get("team2") or item.get("awayTeam")
-
-        if isinstance(home, dict):
-            home = home.get("name")
-        if isinstance(away, dict):
-            away = away.get("name")
-
-        score = item.get("score") or {}
-        full_time = score.get("ft", {}) if isinstance(score, dict) else {}
-
-        if isinstance(full_time, dict):
-            hg = full_time.get("home", full_time.get("team1"))
-            ag = full_time.get("away", full_time.get("team2"))
-        elif isinstance(full_time, list) and len(full_time) >= 2:
-            hg, ag = full_time[0], full_time[1]
-        else:
-            hg = ag = None
-
-        try:
-            hg, ag = int(hg), int(ag)
-        except (TypeError, ValueError):
-            # Ne jamais inventer un score absent.
-            continue
-
-        if home and away:
-            matches.append({
-                "date": match_date,
-                "domicile": str(home),
-                "exterieur": str(away),
-                "buts_dom": hg,
-                "buts_ext": ag,
-                "source": "OpenFootball",
-            })
-
-    return matches
-
-
-@st.cache_data(ttl=1800, show_spinner=False)
-def load_openfootball_results(slugs, target_iso):
-    target = date.fromisoformat(target_iso)
-    matches = []
-    errors = []
-
-    start_year = (
-        target.year if target.month >= 7 else target.year - 1
-    )
-    seasons = [
-        f"{start_year}-{start_year + 1}",
-        f"{start_year - 1}-{start_year}",
-    ]
-
-    for slug in slugs:
-        found = False
-
-        for season in seasons:
-            url = f"{OPENFOOTBALL_BASE}/{season}/{slug}.json"
-
-            try:
-                response = requests.get(
-                    url, headers=HEADERS, timeout=TIMEOUT
-                )
-
-                if response.status_code == 404:
-                    continue
-
-                response.raise_for_status()
-                parsed = parse_openfootball_matches(
-                    response.json(), target
-                )
-
-                if parsed:
-                    matches.extend(parsed)
-                    found = True
-                    break
-
-            except (requests.RequestException, ValueError) as exc:
-                errors.append(
-                    f"OpenFootball {slug}: {type(exc).__name__}"
-                )
-
-        if not found:
-            errors.append(
-                f"OpenFootball : aucun résultat exploitable pour {slug}."
-            )
-
-    return matches, errors
-
-def match_team_name(candidate, requested):
-    a = normalize(candidate)
-    b = normalize(requested)
-
-    if not a or not b:
-        return False
-
-    if a == b:
-        return True
-
-    return min(len(a), len(b)) >= 6 and (a in b or b in a)
-
-
-def team_history(matches, team, venue=None, limit=10):
+def team_matches(df: pd.DataFrame, team: str, venue: str | None = None) -> list[dict]:
+    games = df[(df["home"] == team) | (df["away"] == team)].sort_values("date", ascending=False)
     rows = []
-
-    for match in matches:
-        home = match_team_name(match["domicile"], team)
-        away = match_team_name(match["exterieur"], team)
-
-        if home == away:
+    for _, m in games.iterrows():
+        is_home = m["home"] == team
+        if venue == "home" and not is_home:
             continue
-
-        if not home and not away:
+        if venue == "away" and is_home:
             continue
-
-        if venue == "domicile" and not home:
-            continue
-
-        if venue == "extérieur" and not away:
-            continue
-
-        if home:
-            scored = match["buts_dom"]
-            conceded = match["buts_ext"]
-            opponent = match["exterieur"]
-            location = "Domicile"
-        else:
-            scored = match["buts_ext"]
-            conceded = match["buts_dom"]
-            opponent = match["domicile"]
-            location = "Extérieur"
-
-        result = (
-            "V" if scored > conceded
-            else "N" if scored == conceded
-            else "D"
-        )
-
+        gf = int(m["ft_home"] if is_home else m["ft_away"])
+        ga = int(m["ft_away"] if is_home else m["ft_home"])
         rows.append({
-            "Date": match["date"],
-            "Adversaire": opponent,
-            "Lieu": location,
-            "Buts marqués": scored,
-            "Buts encaissés": conceded,
-            "Résultat": result,
-            "Source": match["source"],
+            "Date": m["date"].strftime("%Y-%m-%d"),
+            "Adversaire": m["away"] if is_home else m["home"],
+            "Terrain": "Domicile" if is_home else "Extérieur",
+            "Score": f"{int(m['ft_home'])}-{int(m['ft_away'])}",
+            "BP": gf, "BC": ga,
+            "Résultat": "V" if gf > ga else ("N" if gf == ga else "D"),
         })
+        if len(rows) >= 10:
+            break
+    return rows
 
-    rows.sort(key=lambda row: row["Date"], reverse=True)
-    return rows[:limit]
+def poisson(lam: float, max_goals: int = 8):
+    return [math.exp(-lam) * lam**k / math.factorial(k) for k in range(max_goals + 1)]
 
-
-def weighted_stats(rows):
-    if not rows:
-        return None
-
-    # Les matchs les plus récents pèsent davantage.
-    weights = list(range(len(rows), 0, -1))
-    denominator = sum(weights)
-
-    goals_for = sum(
-        row["Buts marqués"] * weight
-        for row, weight in zip(rows, weights)
-    ) / denominator
-
-    goals_against = sum(
-        row["Buts encaissés"] * weight
-        for row, weight in zip(rows, weights)
-    ) / denominator
-
-    points = sum(
-        (
-            3 if row["Résultat"] == "V"
-            else 1 if row["Résultat"] == "N"
-            else 0
-        ) * weight
-        for row, weight in zip(rows, weights)
-    ) / denominator
-
+def prediction(home_rows: list[dict], away_rows: list[dict]) -> dict:
+    if not home_rows or not away_rows:
+        raise ValueError("Il manque des matchs terminés pour une équipe. Essaie un autre championnat.")
+    hgf = sum(r["BP"] for r in home_rows) / len(home_rows)
+    hga = sum(r["BC"] for r in home_rows) / len(home_rows)
+    agf = sum(r["BP"] for r in away_rows) / len(away_rows)
+    aga = sum(r["BC"] for r in away_rows) / len(away_rows)
+    h_home = [r for r in home_rows if r["Terrain"] == "Domicile"]
+    a_away = [r for r in away_rows if r["Terrain"] == "Extérieur"]
+    hgf_home = sum(r["BP"] for r in h_home) / len(h_home) if len(h_home) >= 3 else hgf
+    hga_home = sum(r["BC"] for r in h_home) / len(h_home) if len(h_home) >= 3 else hga
+    agf_away = sum(r["BP"] for r in a_away) / len(a_away) if len(a_away) >= 3 else agf
+    aga_away = sum(r["BC"] for r in a_away) / len(a_away) if len(a_away) >= 3 else aga
+    lh = max(0.05, 1.06 * (0.60 * hgf_home + 0.40 * aga_away))
+    la = max(0.05, 0.94 * (0.60 * agf_away + 0.40 * hga_home))
+    ph, pa = poisson(lh), poisson(la)
+    p1 = px = p2 = 0.0
+    scores = []
+    for i, pi in enumerate(ph):
+        for j, pj in enumerate(pa):
+            p = pi * pj
+            scores.append((i, j, p))
+            if i > j:
+                p1 += p
+            elif i == j:
+                px += p
+            else:
+                p2 += p
+    total = p1 + px + p2
     return {
-        "nombre": len(rows),
-        "forme": points / 3 * 100,
-        "marques": goals_for,
-        "encaisses": goals_against,
-        "sans_encaisser": (
-            sum(row["Buts encaissés"] == 0 for row in rows)
-            / len(rows) * 100
-        ),
+        "p1": p1 / total, "px": px / total, "p2": p2 / total,
+        "scores": sorted(scores, key=lambda x: x[2], reverse=True)[:2],
+        "lh": lh, "la": la,
     }
 
-
-def predict(home_rows, away_rows):
-    # Il faut au moins trois matchs par équipe.
-    if len(home_rows) < 3 or len(away_rows) < 3:
-        return None
-
-    hs = weighted_stats(home_rows)
-    aws = weighted_stats(away_rows)
-
-    home_venue = [
-        row for row in home_rows
-        if row["Lieu"] == "Domicile"
-    ]
-    away_venue = [
-        row for row in away_rows
-        if row["Lieu"] == "Extérieur"
-    ]
-
-    hvs = (
-        weighted_stats(home_venue)
-        if len(home_venue) >= 3 else hs
-    )
-    avs = (
-        weighted_stats(away_venue)
-        if len(away_venue) >= 3 else aws
-    )
-
-    expected_home = max(
-        0.15,
-        min(
-            3.8,
-            0.55 * hvs["marques"]
-            + 0.35 * avs["encaisses"]
-            + 0.15
-        )
-    )
-
-    expected_away = max(
-        0.15,
-        min(
-            3.8,
-            0.55 * avs["marques"]
-            + 0.35 * hvs["encaisses"]
-        )
-    )
-
-    matrix = [
-        (
-            poisson(expected_home, i)
-            * poisson(expected_away, j),
-            i,
-            j,
-        )
-        for i in range(8)
-        for j in range(8)
-    ]
-
-    p1 = sum(p for p, i, j in matrix if i > j)
-    pn = sum(p for p, i, j in matrix if i == j)
-    p2 = sum(p for p, i, j in matrix if i < j)
-
-    total = p1 + pn + p2
-
+def stats(rows: list[dict]) -> dict:
+    n = len(rows)
+    w = sum(r["Résultat"] == "V" for r in rows)
+    d = sum(r["Résultat"] == "N" for r in rows)
+    l = sum(r["Résultat"] == "D" for r in rows)
     return {
-        "home_stats": hs,
-        "away_stats": aws,
-        "scores": sorted(matrix, reverse=True)[:5],
-        "probabilities": (
-            p1 / total * 100,
-            pn / total * 100,
-            p2 / total * 100,
-        ),
-        "expected_goals": (expected_home, expected_away),
-        "home_venue_count": len(home_venue),
-        "away_venue_count": len(away_venue),
+        "n": n, "w": w, "d": d, "l": l, "pts": 3*w+d,
+        "gf": sum(r["BP"] for r in rows), "ga": sum(r["BC"] for r in rows),
+        "form": "".join(r["Résultat"] for r in rows),
+        "avg_gf": sum(r["BP"] for r in rows)/n if n else 0,
+        "avg_ga": sum(r["BC"] for r in rows)/n if n else 0,
     }
 
+with st.sidebar:
+    st.header("Source des données")
+    st.write("Open-matchday — CSV public")
+    st.markdown("[Ouvrir la source](https://github.com/oladeeayo/open-matchday)")
+    st.caption("Aucune clé API. Données non live, actualisées quotidiennement.")
+    league_name = st.selectbox("Championnat", list(LEAGUES.keys()))
 
-def fetch_matches(league, target):
-    matches = []
-    errors = []
+try:
+    with st.spinner("Chargement des résultats publics..."):
+        df = load_league(LEAGUES[league_name])
+except Exception as e:
+    st.error(f"Impossible de charger ce championnat : {e}")
+    st.stop()
 
-    if league in LEAGUES:
-        code = LEAGUES[league]
+teams = sorted(set(df["home"].dropna().astype(str)) | set(df["away"].dropna().astype(str)))
+if len(teams) < 2:
+    st.error("Pas assez d'équipes dans les données de ce championnat.")
+    st.stop()
 
-        csv_matches, csv_errors = load_csv_results(
-            code, target.isoformat()
-        )
-        matches.extend(csv_matches)
-        errors.extend(csv_errors)
+st.header("1. Choisir le match")
+c1, c2 = st.columns(2)
+with c1:
+    home = st.selectbox("Équipe à domicile", teams, index=0)
+with c2:
+    away = st.selectbox("Équipe à l'extérieur", teams, index=1 if len(teams) > 1 else 0)
+c3, c4 = st.columns(2)
+with c3:
+    match_date = st.date_input("Date du match", value=date.today())
+with c4:
+    match_time = st.time_input("Heure locale", value=time(17, 0))
 
-    elif league in OPENFOOTBALL_LEAGUES:
-        of_matches, of_errors = load_openfootball_results(
-            tuple(OPENFOOTBALL_LEAGUES[league]),
-            target.isoformat(),
-        )
-        matches.extend(of_matches)
-        errors.extend(of_errors)
+if home == away:
+    st.warning("Choisis deux équipes différentes.")
+elif st.button("Analyser le match", type="primary", use_container_width=True):
+    hrows = team_matches(df, home)
+    arows = team_matches(df, away)
+    if not hrows or not arows:
+        st.error("Pas assez de résultats terminés pour une des équipes. Essaie un autre championnat.")
+        st.stop()
 
-    unique = {}
+    st.subheader("2. Forme récente — jusqu'à 10 matchs terminés")
+    c1, c2 = st.columns(2)
+    for col, name, rows in [(c1, home, hrows), (c2, away, arows)]:
+        s = stats(rows)
+        with col:
+            st.markdown(f"### {name}")
+            st.write(f"Forme (plus récent → plus ancien) : **{s['form']}**")
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Victoires", s["w"])
+            m2.metric("Nuls", s["d"])
+            m3.metric("Défaites", s["l"])
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Points", f"{s['pts']}/{3*s['n']}")
+            m2.metric("Buts marqués", s["gf"])
+            m3.metric("Buts encaissés", s["ga"])
+            st.write(f"Moyenne marquée : **{s['avg_gf']:.2f}** par match")
+            st.write(f"Moyenne encaissée : **{s['avg_ga']:.2f}** par match")
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
-    for match in matches:
-        key = (
-            match["date"],
-            normalize(match["domicile"]),
-            normalize(match["exterieur"]),
-            match["buts_dom"],
-            match["buts_ext"],
-        )
-        unique.setdefault(key, match)
-
-    return (
-        sorted(
-            unique.values(),
-            key=lambda item: item["date"],
-            reverse=True,
-        ),
-        errors,
-)
-               
-
-# =========================
-# PARTIE 4/4 : INTERFACE
-# =========================
-
-st.subheader("1. Choisir la compétition")
-
-league = st.selectbox("Compétition", ALL_LEAGUES)
-
-col1, col2 = st.columns(2)
-
-with col1:
-    home_name = st.text_input("Équipe à domicile", placeholder="Ex. : PSG")
-
-with col2:
-    away_name = st.text_input("Équipe à l'extérieur", placeholder="Ex. : Lyon")
-
-match_date = st.date_input("Date du match")
-match_time = st.time_input("Heure locale du match")
-
-with st.expander("Cotes des bookmakers (facultatif)"):
-    odd_home = st.number_input(
-        "Cote victoire domicile", min_value=0.0, value=0.0, step=0.05
+    st.subheader("3. Pronostic statistique")
+    pred = prediction(hrows, arows)
+    c1, cx, c2 = st.columns(3)
+    c1.metric(f"Victoire {home}", f"{pred['p1']*100:.1f}%")
+    cx.metric("Match nul", f"{pred['px']*100:.1f}%")
+    c2.metric(f"Victoire {away}", f"{pred['p2']*100:.1f}%")
+    st.markdown("#### Deux scores exacts les plus probables selon le modèle")
+    s1, s2 = st.columns(2)
+    for col, (gh, ga, p) in zip((s1, s2), pred["scores"]):
+        col.metric("Score estimé", f"{gh} – {ga}", f"{p*100:.1f}% selon le modèle")
+    st.write(f"Buts attendus estimés : **{home} {pred['lh']:.2f} — {pred['la']:.2f} {away}**")
+    st.subheader("4. Limites")
+    st.markdown(
+        "- Les pourcentages sont des estimations, pas des garanties.\n"
+        "- Les données sont actualisées quotidiennement, pas en direct.\n"
+        "- Les blessures, compositions, xG et cotes ne sont pas fournis par cette source.\n"
+        "- Les 10 matchs peuvent inclure la saison précédente si les fichiers sont disponibles.\n"
+        "- Certains championnats peuvent ne pas être disponibles ou avoir des données incomplètes."
     )
-    odd_draw = st.number_input(
-        "Cote match nul", min_value=0.0, value=0.0, step=0.05
-    )
-    odd_away = st.number_input(
-        "Cote victoire extérieur", min_value=0.0, value=0.0, step=0.05
-    )
-
-if st.button("⚽ Analyser le match", type="primary"):
-    if not home_name.strip() or not away_name.strip():
-        st.error("Saisis les noms des deux équipes.")
-    elif normalize(home_name) == normalize(away_name):
-        st.error("Choisis deux équipes différentes.")
-    else:
-        with st.spinner("Recherche des résultats disponibles..."):
-            matches, errors = fetch_matches(league)
-
-        home_rows = team_history(matches, home_name, limit=10)
-        away_rows = team_history(matches, away_name, limit=10)
-
-        st.subheader("2. Vérification des données")
-        st.write(f"Compétition sélectionnée : **{league}**")
-        st.write(f"Match à analyser : **{home_name} – {away_name}**")
-        st.write(f"Date prévue : **{match_date} à {match_time}**")
-        st.write(f"Résultats récupérés : **{len(matches)}**")
-        st.write(f"Matchs trouvés pour {home_name} : **{len(home_rows)}**")
-        st.write(f"Matchs trouvés pour {away_name} : **{len(away_rows)}**")
-
-        if errors:
-            with st.expander("Sources et éventuels problèmes"):
-                for error in errors:
-                    st.warning(error)
-
-        result = predict(home_rows, away_rows)
-
-        if result is None:
-            st.warning(
-                "Données insuffisantes pour produire une prédiction fiable. "
-                "Il faut au minimum 3 résultats exploitables pour chaque équipe. "
-                "Aucun score ne sera inventé."
-            )
-        else:
-            st.subheader("3. Probabilités du résultat")
-
-            probs = result["probabilities"]
-            c1, c2, c3 = st.columns(3)
-
-            c1.metric("Victoire domicile", f'{probs["1"]:.1f}%')
-            c2.metric("Match nul", f'{probs["N"]:.1f}%')
-            c3.metric("Victoire extérieur", f'{probs["2"]:.1f}%')
-
-            st.caption(
-                "Ces pourcentages sont des estimations statistiques, "
-                "pas des garanties de résultat."
-            )
-
-            st.subheader("4. Scores exacts les plus probables")
-
-            score_cols = st.columns(min(3, len(result["scores"])))
-
-            for index, (score, probability) in enumerate(result["scores"][:3]):
-                score_cols[index].metric(
-                    f"Option {index + 1}",
-                    score,
-                    f"{probability:.1f}% estimés"
-                )
-
-            st.write(
-                f"Buts attendus — {home_name} : "
-                f'**{result["lambda_home"]:.2f}**'
-            )
-            st.write(
-                f"Buts attendus — {away_name} : "
-                f'**{result["lambda_away"]:.2f}**'
-            )
-
-            st.subheader("5. Forme récente et statistiques")
-
-            stats_data = []
-
-            for team, history in [
-                (home_name, home_rows),
-                (away_name, away_rows)
-            ]:
-                stats = weighted_stats(history)
-
-                if stats:
-                    stats_data.append({
-                        "Équipe": team,
-                        "Matchs analysés": stats["played"],
-                        "Victoires": stats["wins"],
-                        "Nuls": stats["draws"],
-                        "Défaites": stats["losses"],
-                        "Buts marqués/match": round(stats["scored"], 2),
-                        "Buts encaissés/match": round(stats["conceded"], 2)
-                    })
-
-            if stats_data:
-                st.dataframe(
-                    pd.DataFrame(stats_data),
-                    use_container_width=True,
-                    hide_index=True
-                )
-
-            with st.expander(f"Historique récent — {home_name}"):
-                if home_rows:
-                    st.dataframe(
-                        pd.DataFrame(home_rows),
-                        use_container_width=True,
-                        hide_index=True
-                    )
-                else:
-                    st.info("Aucun résultat récent trouvé pour cette équipe.")
-
-            with st.expander(f"Historique récent — {away_name}"):
-                if away_rows:
-                    st.dataframe(
-                        pd.DataFrame(away_rows),
-                        use_container_width=True,
-                        hide_index=True
-                    )
-                else:
-                    st.info("Aucun résultat récent trouvé pour cette équipe.")
-
-            odds = [odd_home, odd_draw, odd_away]
-
-            if all(odd > 1.0 for odd in odds):
-                implied = [100 / odd for odd in odds]
-                total = sum(implied)
-
-                st.subheader("6. Comparaison indicative des cotes")
-                st.write(
-                    "Probabilités brutes implicites des cotes, "
-                    "avant correction de la marge du bookmaker :"
-                )
-
-                odds_data = pd.DataFrame({
-                    "Résultat": [
-                        "Victoire domicile",
-                        "Match nul",
-                        "Victoire extérieur"
-                    ],
-                    "Cote": odds,
-                    "Probabilité brute (%)": [
-                        round(value, 1) for value in implied
-                    ],
-                    "Probabilité normalisée (%)": [
-                        round(value / total * 100, 1)
-                        for value in implied
-                    ]
-                })
-
-                st.dataframe(
-                    odds_data,
-                    use_container_width=True,
-                    hide_index=True
-                )
+    st.caption(f"Source : open-matchday — {league_name}. Vérifie les résultats avant toute décision.")
 
 st.divider()
-
-st.caption(
-    "Sources prévues : football-data.co.uk et OpenFootball. "
-    "La disponibilité dépend de la compétition et des fichiers accessibles. "
-    "Les absences, compositions officielles et cotes en direct ne sont pas "
-    "automatiquement confirmées par cette version. Vérifie les données "
-    "avant toute décision."
-        )
-    
+st.caption("Source : https://github.com/oladeeayo/open-matchday — usage informatif non commercial. Les pronostics ne garantissent aucun gain.")
