@@ -64,6 +64,55 @@ def load_league(slug: str) -> pd.DataFrame:
     result = result.drop_duplicates(subset=["date", "home", "away"], keep="last")
     return result.sort_values("date", ascending=False)
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def fotmob_search_team(name):
+    try:
+        response = requests.get(
+            f"{FOTMOB_API}/search/suggest",
+            params={"term": name},
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=20
+        )
+        response.raise_for_status()
+        data = response.json()
+
+        for item in data.get("suggestions", []):
+            if item.get("type") == "team":
+                return {
+                    "id": item.get("id"),
+                    "name": item.get("name")
+                }
+        return None
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fotmob_get_squad(team_id):
+    try:
+        response = requests.get(
+            f"{FOTMOB_API}/data/teams",
+            params={"id": team_id},
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=20
+        )
+        response.raise_for_status()
+        data = response.json()
+
+        players = []
+        for group in data.get("squad", []):
+            position = group.get("title", "Poste inconnu")
+            for player in group.get("members", []):
+                players.append({
+                    "id": player.get("id"),
+                    "name": player.get("name"),
+                    "position": player.get("role") or position
+                })
+
+        return players
+    except Exception:
+        return None
+
 def team_matches(df: pd.DataFrame, team: str, venue: str | None = None) -> list[dict]:
     games = df[(df["home"] == team) | (df["away"] == team)].sort_values("date", ascending=False)
     rows = []
