@@ -65,6 +65,7 @@ def load_league(slug: str) -> pd.DataFrame:
     return result.sort_values("date", ascending=False)
 
 @st.cache_data(ttl=3600, show_spinner=False)
+
 def fotmob_search_team(name):
     try:
         response = requests.get(
