@@ -224,7 +224,35 @@ if st.button("Tester FotMob"):
     for team_name in [home, away]:
         st.write(f"Recherche : {team_name}")
 
-        team_info = fotmob_search_team(team_name)
+        @st.cache_data(ttl=300, show_spinner=False)
+def fotmob_search_team(name):
+    try:
+        response = requests.get(
+            "https://www.fotmob.com/api/search/suggest",
+            params={"term": name},
+            headers={
+                "User-Agent": "Mozilla/5.0",
+                "Accept": "application/json"
+            },
+            timeout=20
+        )
+
+        response.raise_for_status()
+        data = response.json()
+
+        suggestions = data.get("suggestions", [])
+
+        # Afficher les résultats reçus pour diagnostiquer
+        return {
+            "suggestions": suggestions,
+            "error": None
+        }
+
+    except Exception as e:
+        return {
+            "suggestions": [],
+            "error": str(e)
+    }
 
         if not team_info:
             st.warning(f"Équipe introuvable sur FotMob : {team_name}")
