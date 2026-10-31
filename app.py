@@ -9,6 +9,8 @@ import streamlit as st
 BASE = "https://raw.githubusercontent.com/oladeeayo/open-matchday/master/data"
 TIMEOUT = 25
 
+FOTMOB_API = "https://www.fotmob.com/api"
+
 LEAGUES = {
     "Angleterre — Premier League": "ENG_1_premier-league",
     "Angleterre — Championship": "ENG_2_championship",
