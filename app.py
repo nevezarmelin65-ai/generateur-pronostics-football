@@ -224,6 +224,25 @@ if st.button("Tester FotMob"):
     for team_name in [home, away]:
         st.write(f"Recherche : {team_name}")
 
+        result = fotmob_search_team(team_name)
+
+        if result["error"]:
+            st.error(result["error"])
+            continue
+
+        suggestions = result["suggestions"]
+
+        if not suggestions:
+            st.warning("FotMob n'a retourné aucune suggestion.")
+            continue
+
+        st.write("Résultats reçus par FotMob :")
+        st.json(suggestions)
+
+if st.button("Tester FotMob"):
+    for team_name in [home, away]:
+        st.write(f"Recherche : {team_name}")
+
         @st.cache_data(ttl=300, show_spinner=False)
 def fotmob_search_team(name):
     try:
