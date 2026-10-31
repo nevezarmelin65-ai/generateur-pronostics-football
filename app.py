@@ -9,8 +9,6 @@ import streamlit as st
 BASE = "https://raw.githubusercontent.com/oladeeayo/open-matchday/master/data"
 TIMEOUT = 25
 
-FOTMOB_API = "https://www.fotmob.com/api"
-
 LEAGUES = {
     "Angleterre — Premier League": "ENG_1_premier-league",
     "Angleterre — Championship": "ENG_2_championship",
@@ -63,56 +61,6 @@ def load_league(slug: str) -> pd.DataFrame:
     result = pd.concat(frames, ignore_index=True)
     result = result.drop_duplicates(subset=["date", "home", "away"], keep="last")
     return result.sort_values("date", ascending=False)
-
-@st.cache_data(ttl=3600, show_spinner=False)
-
-def fotmob_search_team(name):
-    try:
-        response = requests.get(
-            f"{FOTMOB_API}/search/suggest",
-            params={"term": name},
-            headers={"User-Agent": "Mozilla/5.0"},
-            timeout=20
-        )
-        response.raise_for_status()
-        data = response.json()
-
-        for item in data.get("suggestions", []):
-            if item.get("type") == "team":
-                return {
-                    "id": item.get("id"),
-                    "name": item.get("name")
-                }
-        return None
-    except Exception:
-        return None
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def fotmob_get_squad(team_id):
-    try:
-        response = requests.get(
-            f"{FOTMOB_API}/data/teams",
-            params={"id": team_id},
-            headers={"User-Agent": "Mozilla/5.0"},
-            timeout=20
-        )
-        response.raise_for_status()
-        data = response.json()
-
-        players = []
-        for group in data.get("squad", []):
-            position = group.get("title", "Poste inconnu")
-            for player in group.get("members", []):
-                players.append({
-                    "id": player.get("id"),
-                    "name": player.get("name"),
-                    "position": player.get("role") or position
-                })
-
-        return players
-    except Exception:
-        return None
 
 def team_matches(df: pd.DataFrame, team: str, venue: str | None = None) -> list[dict]:
     games = df[(df["home"] == team) | (df["away"] == team)].sort_values("date", ascending=False)
@@ -219,76 +167,6 @@ with c3:
 with c4:
     match_time = st.time_input("Heure locale", value=time(17, 0))
 
-st.header("Test de connexion FotMob")
-
-if st.button("Tester FotMob"):
-    for team_name in [home, away]:
-        st.write(f"Recherche : {team_name}")
-
-        result = fotmob_search_team(team_name)
-
-        if result["error"]:
-            st.error(result["error"])
-            continue
-
-        suggestions = result["suggestions"]
-
-        if not suggestions:
-            st.warning("FotMob n'a retourné aucune suggestion.")
-            continue
-
-        st.write("Résultats reçus par FotMob :")
-        st.json(suggestions)
-
-if st.button("Tester FotMob"):
-    for team_name in [home, away]:
-        st.write(f"Recherche : {team_name}")
-
-        @st.cache_data(ttl=300, show_spinner=False)
-def fotmob_search_team(name):
-    try:
-        response = requests.get(
-            "https://www.fotmob.com/api/search/suggest",
-            params={"term": name},
-            headers={
-                "User-Agent": "Mozilla/5.0",
-                "Accept": "application/json"
-            },
-            timeout=20
-        )
-
-        response.raise_for_status()
-        data = response.json()
-
-        suggestions = data.get("suggestions", [])
-
-        # Afficher les résultats reçus pour diagnostiquer
-        return {
-            "suggestions": suggestions,
-            "error": None
-        }
-
-    except Exception as e:
-        return {
-            "suggestions": [],
-            "error": str(e)
-    }
-
-        if not team_info:
-            st.warning(f"Équipe introuvable sur FotMob : {team_name}")
-            continue
-
-        st.success(f"Équipe trouvée : {team_info['name']}")
-
-        players = fotmob_get_squad(team_info["id"])
-
-        if players is None:
-            st.warning("Impossible de récupérer l'effectif.")
-        elif not players:
-            st.warning("Aucun joueur retourné.")
-        else:
-            st.success(f"{len(players)} joueurs récupérés.")
-            st.dataframe(pd.DataFrame(players), use_container_width=True)
 
 st.header("2. Sélection des joueurs absents")
 
