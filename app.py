@@ -218,6 +218,29 @@ with c3:
 with c4:
     match_time = st.time_input("Heure locale", value=time(17, 0))
 
+st.header("Test de connexion FotMob")
+
+if st.button("Tester FotMob"):
+    for team_name in [home, away]:
+        st.write(f"Recherche : {team_name}")
+
+        team_info = fotmob_search_team(team_name)
+
+        if not team_info:
+            st.warning(f"Équipe introuvable sur FotMob : {team_name}")
+            continue
+
+        st.success(f"Équipe trouvée : {team_info['name']}")
+
+        players = fotmob_get_squad(team_info["id"])
+
+        if players is None:
+            st.warning("Impossible de récupérer l'effectif.")
+        elif not players:
+            st.warning("Aucun joueur retourné.")
+        else:
+            st.success(f"{len(players)} joueurs récupérés.")
+            st.dataframe(pd.DataFrame(players), use_container_width=True)
 
 st.header("2. Sélection des joueurs absents")
 
